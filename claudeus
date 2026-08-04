@@ -30,6 +30,16 @@ ENV_FILE="$HOME/.config/claude-sandbox/env"
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 IMAGE_NAME="claude-sandbox"
 
+# Alias vers les noms de variables attendus dans le conteneur. Nécessaire pour
+# pouvoir utiliser `docker run -e VAR` (sans "=valeur") plus bas : cette forme
+# lit la valeur depuis l'environnement du process docker et la transmet au
+# conteneur via le socket, sans jamais l'écrire dans les argv de `docker run`
+# — sinon visible en clair par n'importe qui sur la machine via `ps aux`.
+export GIT_AUTHOR_NAME="${GIT_USER_NAME:-}"
+export GIT_AUTHOR_EMAIL="${GIT_USER_EMAIL:-}"
+export GIT_COMMITTER_NAME="${GIT_USER_NAME:-}"
+export GIT_COMMITTER_EMAIL="${GIT_USER_EMAIL:-}"
+
 # Premier argument = chemin du projet si c'est un répertoire existant ;
 # sinon on retombe sur le répertoire courant (rétrocompatible avec
 # `claudeus yolo` lancé depuis l'intérieur du projet).
@@ -71,11 +81,11 @@ docker run -it --rm \
     -v claude-sandbox-dind:/var/lib/docker \
     -v "$SCRIPT_DIR/.devcontainer/URL_whitelist.yml":/usr/local/etc/url-whitelist.yml:ro \
     -e CLAUDE_CONFIG_DIR=/home/node/.claude \
-    -e GH_TOKEN="${GH_TOKEN:-}" \
-    -e GIT_AUTHOR_NAME="${GIT_USER_NAME:-}" \
-    -e GIT_AUTHOR_EMAIL="${GIT_USER_EMAIL:-}" \
-    -e GIT_COMMITTER_NAME="${GIT_USER_NAME:-}" \
-    -e GIT_COMMITTER_EMAIL="${GIT_USER_EMAIL:-}" \
+    -e GH_TOKEN \
+    -e GIT_AUTHOR_NAME \
+    -e GIT_AUTHOR_EMAIL \
+    -e GIT_COMMITTER_NAME \
+    -e GIT_COMMITTER_EMAIL \
     -w /workspace \
     "$IMAGE_NAME" \
     bash -c '
