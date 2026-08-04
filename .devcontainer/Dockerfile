@@ -93,6 +93,6 @@ COPY init-firewall.sh init-firewall-dind.sh /usr/local/bin/
 COPY URL_whitelist.yml /usr/local/etc/url-whitelist.yml
 USER root
 RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/init-firewall-dind.sh && \
-  echo "node ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh, /usr/local/bin/init-firewall-dind.sh, /usr/bin/dockerd" > /etc/sudoers.d/node-firewall && \
+  echo 'node ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh "", /usr/local/bin/init-firewall-dind.sh "", /usr/bin/dockerd ""' > /etc/sudoers.d/node-firewall && \
   chmod 0440 /etc/sudoers.d/node-firewall
 USER node
