@@ -1,3 +1,5 @@
+![Claudeus logo](logo.jpeg)
+
 # Claudeus — Claude Code Sandbox
 
 An isolated Docker environment for running Claude Code with `--dangerously-skip-permissions` without exposing the host machine. Based on Anthropic's reference devcontainer (`anthropics/claude-code`), adapted for Python/ML development: Python 3 + `uv` preinstalled, PyPI and Hugging Face allowed through the firewall, and optional Docker-in-Docker support via [sysbox](https://github.com/nestybox/sysbox).
