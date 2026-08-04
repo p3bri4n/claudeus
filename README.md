@@ -1,4 +1,4 @@
-# Claude Code Sandbox
+# Claudeus — Claude Code Sandbox
 
 An isolated Docker environment for running Claude Code with `--dangerously-skip-permissions` without exposing the host machine. Based on Anthropic's reference devcontainer (`anthropics/claude-code`), adapted for Python/ML development: Python 3 + `uv` preinstalled, PyPI and Hugging Face allowed through the firewall, and optional Docker-in-Docker support via [sysbox](https://github.com/nestybox/sysbox).
 
@@ -30,19 +30,23 @@ An isolated Docker environment for running Claude Code with `--dangerously-skip-
 
 ```bash
 # Install (once)
-mkdir -p ~/tools && cp -r claude-sandbox ~/tools/
-chmod +x ~/tools/claude-sandbox/claude-sandbox.sh
+git clone <this-repo-url> ~/tools/claudeus     # or: cp -r claudeus ~/tools/
+chmod +x ~/tools/claudeus/claudeus
+mkdir -p ~/.local/bin
+ln -s ~/tools/claudeus/claudeus ~/.local/bin/claudeus   # make sure ~/.local/bin is on your PATH
 
-# Daily use
-cd ~/projects/my-project
-~/tools/claude-sandbox/claude-sandbox.sh yolo    # Claude in autonomous mode
+# Daily use — pass the project path as the first argument
+claudeus ~/projects/my-project yolo    # Claude in autonomous mode
 ```
 
-Other modes:
+Other modes, and running from inside the project directory:
 
 ```bash
-~/tools/claude-sandbox/claude-sandbox.sh          # bash shell in the container
-~/tools/claude-sandbox/claude-sandbox.sh claude   # Claude in normal mode (with prompts)
+claudeus ~/projects/my-project          # bash shell in the container
+claudeus ~/projects/my-project claude   # Claude in normal mode (with prompts)
+
+cd ~/projects/my-project
+claudeus yolo                           # path omitted → uses the current directory
 ```
 
 First run: builds the image (~2-3 min), then `claude` will ask you to authenticate. Auth is kept for subsequent sessions. If you edit the Dockerfile later, remove the stale image (`docker rmi claude-sandbox`) so it gets rebuilt on the next run.
@@ -50,7 +54,7 @@ First run: builds the image (~2-3 min), then `claude` will ask you to authentica
 ### Option B — VS Code Devcontainer
 
 ```bash
-cp -r claude-sandbox/.devcontainer ~/projects/my-project/
+cp -r ~/tools/claudeus/.devcontainer ~/projects/my-project/
 ```
 
 Then open the project in VS Code → "Reopen in Container". Once inside, open a terminal → `claude --dangerously-skip-permissions`.
@@ -76,7 +80,7 @@ The idea: a revocable, narrowly-scoped fine-grained PAT, never your SSH keys, in
    chmod 600 ~/.config/claude-sandbox/env
    ```
 
-3. **That's it.** `claude-sandbox.sh` sources this file automatically, passes the token into the container, and wires git to it via `gh auth setup-git`. Inside the container, `git clone/push`, `gh pr create`, etc. work out of the box — use **HTTPS** URLs (not `git@github.com:`).
+3. **That's it.** `claudeus` sources this file automatically, passes the token into the container, and wires git to it via `gh auth setup-git`. Inside the container, `git clone/push`, `gh pr create`, etc. work out of the box — use **HTTPS** URLs (not `git@github.com:`).
 
 For the VS Code devcontainer: export `GH_TOKEN` in your shell before launching VS Code (`devcontainer.json` picks it up via `${localEnv:GH_TOKEN}`).
 
@@ -124,7 +128,7 @@ Officially supported: Ubuntu 24.04 (Noble, kernel 6.8+), 22.04, 20.04, 18.04, De
 
 ### What changes
 
-- `claude-sandbox.sh` and the devcontainer launch the container with `--runtime=sysbox-runc` (no more `--cap-add=NET_ADMIN`/`NET_RAW`: sysbox already grants root the capabilities it needs inside its own user-namespace).
+- `claudeus` and the devcontainer launch the container with `--runtime=sysbox-runc` (no more `--cap-add=NET_ADMIN`/`NET_RAW`: sysbox already grants root the capabilities it needs inside its own user-namespace).
 - An inner `dockerd` starts automatically when the sandbox launches. `docker build` / `docker run` work directly from inside the sandbox.
 - Inner Docker images/layers persist in a dedicated named volume (`claude-sandbox-dind` for the CLI script, `claude-code-dind-${devcontainerId}` for the devcontainer), separate from the host's own `/var/lib/docker`.
 - **The egress whitelist also applies to nested containers**: `init-firewall-dind.sh` populates the `DOCKER-USER` chain (the insertion point Docker provides for exactly this kind of rule, evaluated before its own permissive bridge rules) with the same `allowed-domains` ipset as the sandbox itself. A container launched from inside the sandbox can't exfiltrate to a domain outside the whitelist either.

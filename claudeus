@@ -2,10 +2,14 @@
 # Lance Claude Code en mode autonome dans un conteneur isolé, sans VS Code.
 #
 # Usage :
-#   cd ~/mon-projet
-#   ~/tools/claude-sandbox/claude-sandbox.sh              # shell dans le conteneur
-#   ~/tools/claude-sandbox/claude-sandbox.sh claude       # Claude directement (mode normal)
-#   ~/tools/claude-sandbox/claude-sandbox.sh yolo         # Claude en --dangerously-skip-permissions
+#   claudeus <path> [yolo|claude|<commande>]
+#   claudeus [yolo|claude|<commande>]        # utilise le répertoire courant
+#
+# Exemples :
+#   claudeus ~/projets/mon-projet yolo       # Claude en --dangerously-skip-permissions
+#   claudeus ~/projets/mon-projet claude     # Claude en mode normal (avec prompts)
+#   claudeus ~/projets/mon-projet            # shell bash dans le conteneur
+#   cd ~/projets/mon-projet && claudeus yolo # depuis l'intérieur du projet
 #
 # Premier lancement : build de l'image (~2-3 min), puis authentification
 # Claude (persistée dans le volume claude-sandbox-config).
@@ -21,9 +25,19 @@ set -euo pipefail
 ENV_FILE="$HOME/.config/claude-sandbox/env"
 [ -f "$ENV_FILE" ] && source "$ENV_FILE"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Résolution robuste même invoqué via un symlink dans le PATH (ex. ~/.local/bin/claudeus)
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 IMAGE_NAME="claude-sandbox"
-PROJECT_DIR="$(pwd)"
+
+# Premier argument = chemin du projet si c'est un répertoire existant ;
+# sinon on retombe sur le répertoire courant (rétrocompatible avec
+# `claudeus yolo` lancé depuis l'intérieur du projet).
+if [ $# -gt 0 ] && [ -d "$1" ]; then
+    PROJECT_DIR="$(cd "$1" && pwd)"
+    shift
+else
+    PROJECT_DIR="$(pwd)"
+fi
 PROJECT_NAME="$(basename "$PROJECT_DIR")"
 
 # Build de l'image si absente
