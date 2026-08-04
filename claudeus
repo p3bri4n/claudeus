@@ -2,14 +2,15 @@
 # Lance Claude Code en mode autonome dans un conteneur isolé, sans VS Code.
 #
 # Usage :
-#   claudeus <path> [yolo|claude|<commande>]
-#   claudeus [yolo|claude|<commande>]        # utilise le répertoire courant
+#   claudeus <path> [yolo|claude|shell|<commande>]
+#   claudeus [yolo|claude|shell|<commande>]  # utilise le répertoire courant
 #
 # Exemples :
-#   claudeus ~/projets/mon-projet yolo       # Claude en --dangerously-skip-permissions
+#   claudeus ~/projets/mon-projet            # Claude en --dangerously-skip-permissions (défaut)
+#   claudeus ~/projets/mon-projet yolo       # idem, explicite
 #   claudeus ~/projets/mon-projet claude     # Claude en mode normal (avec prompts)
-#   claudeus ~/projets/mon-projet            # shell bash dans le conteneur
-#   cd ~/projets/mon-projet && claudeus yolo # depuis l'intérieur du projet
+#   claudeus ~/projets/mon-projet shell      # shell bash dans le conteneur
+#   cd ~/projets/mon-projet && claudeus      # depuis l'intérieur du projet
 #
 # Premier lancement : build de l'image (~2-3 min), puis authentification
 # Claude (persistée dans le volume claude-sandbox-config).
@@ -46,13 +47,13 @@ if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
     docker build -t "$IMAGE_NAME" "$SCRIPT_DIR/.devcontainer"
 fi
 
-# Commande à exécuter dans le conteneur
-if [ "${1:-}" = "yolo" ]; then
+# Commande à exécuter dans le conteneur — yolo par défaut si rien n'est précisé
+if [ "${1:-}" = "yolo" ] || [ $# -eq 0 ]; then
     CMD=(claude --dangerously-skip-permissions)
-elif [ $# -gt 0 ]; then
-    CMD=("$@")
-else
+elif [ "${1:-}" = "shell" ]; then
     CMD=(bash)
+else
+    CMD=("$@")
 fi
 
 # --runtime=sysbox-runc : isolation utilisateur complète, permet un dockerd

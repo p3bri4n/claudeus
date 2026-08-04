@@ -38,17 +38,18 @@ mkdir -p ~/.local/bin
 ln -s ~/tools/claudeus/claudeus ~/.local/bin/claudeus   # make sure ~/.local/bin is on your PATH
 
 # Daily use — pass the project path as the first argument
-claudeus ~/projects/my-project yolo    # Claude in autonomous mode
+claudeus ~/projects/my-project          # Claude in autonomous mode (yolo, the default)
 ```
 
 Other modes, and running from inside the project directory:
 
 ```bash
-claudeus ~/projects/my-project          # bash shell in the container
+claudeus ~/projects/my-project yolo     # same as above, explicit
 claudeus ~/projects/my-project claude   # Claude in normal mode (with prompts)
+claudeus ~/projects/my-project shell    # bash shell in the container
 
 cd ~/projects/my-project
-claudeus yolo                           # path omitted → uses the current directory
+claudeus                                # path omitted → uses the current directory
 ```
 
 First run: builds the image (~2-3 min), then `claude` will ask you to authenticate. Auth is kept for subsequent sessions. If you edit the Dockerfile later, remove the stale image (`docker rmi claude-sandbox`) so it gets rebuilt on the next run.
