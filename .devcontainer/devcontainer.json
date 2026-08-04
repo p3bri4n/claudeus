@@ -1,0 +1,42 @@
+{
+  "name": "Claude Code Sandbox",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "args": {
+      "TZ": "${localEnv:TZ:Europe/Paris}",
+      "CLAUDE_CODE_VERSION": "latest"
+    }
+  },
+  "runArgs": [
+    "--runtime=sysbox-runc"
+  ],
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "anthropic.claude-code",
+        "ms-python.python",
+        "charliermarsh.ruff",
+        "eamodio.gitlens"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  },
+  "remoteUser": "node",
+  "mounts": [
+    "source=claude-code-bashhistory-${devcontainerId},target=/commandhistory,type=volume",
+    "source=claude-code-config-${devcontainerId},target=/home/node/.claude,type=volume",
+    "source=claude-code-dind-${devcontainerId},target=/var/lib/docker,type=volume",
+    "source=${localWorkspaceFolder}/.devcontainer/URL_whitelist.yml,target=/usr/local/etc/url-whitelist.yml,type=bind"
+  ],
+  "containerEnv": {
+    "NODE_OPTIONS": "--max-old-space-size=4096",
+    "CLAUDE_CONFIG_DIR": "/home/node/.claude",
+    "GH_TOKEN": "${localEnv:GH_TOKEN}"
+  },
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",
+  "workspaceFolder": "/workspace",
+  "postStartCommand": "sudo /usr/local/bin/init-firewall.sh && (sudo dockerd >/tmp/dockerd.log 2>&1 &) && for i in $(seq 1 30); do [ -S /var/run/docker.sock ] && break; sleep 0.5; done && sudo /usr/local/bin/init-firewall-dind.sh && { [ -n \"$GH_TOKEN\" ] && gh auth setup-git || true; }",
+  "waitFor": "postStartCommand"
+}

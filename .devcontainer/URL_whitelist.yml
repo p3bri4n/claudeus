@@ -1,0 +1,29 @@
+# Egress firewall whitelist for claude-sandbox.
+#
+# Edit this file and relaunch the sandbox — no image rebuild needed, it is
+# bind-mounted read-only into the container and re-read by init-firewall.sh
+# on every startup.
+#
+# Format: two flat lists, one domain per "- " entry. Inline comments (#) and
+# blank lines are ignored.
+#
+#   domains:          required — startup FAILS if one of these can't resolve
+#   optional_domains:  best-effort — a resolution failure only logs a warning
+#
+# Golden rule: only whitelist what the project actually needs. Every domain
+# added here is a potential exfiltration channel, even under prompt injection.
+
+domains:
+  - registry.npmjs.org       # npm install
+  - api.anthropic.com        # Claude Code
+  - pypi.org                 # pip install
+  - files.pythonhosted.org   # pip install (package downloads)
+  - registry-1.docker.io     # DinD: docker pull (Docker Hub)
+  - auth.docker.io           # DinD: docker pull (Docker Hub auth tokens)
+  - production.cloudfront.docker.com  # DinD: docker pull (Docker Hub blob storage)
+
+optional_domains:
+  - sentry.io                 # Claude Code telemetry
+  - statsig.anthropic.com     # Claude Code telemetry
+  - statsig.com                # Claude Code telemetry
+  - cdn-lfs.huggingface.co    # Hugging Face model/dataset downloads
