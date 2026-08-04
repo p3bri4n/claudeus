@@ -1,5 +1,5 @@
 {
-  "name": "Claude Code Sandbox",
+  "name": "Claudeus",
   "build": {
     "dockerfile": "Dockerfile",
     "args": {
@@ -25,9 +25,9 @@
   },
   "remoteUser": "node",
   "mounts": [
-    "source=claude-code-bashhistory-${devcontainerId},target=/commandhistory,type=volume",
-    "source=claude-code-config-${devcontainerId},target=/home/node/.claude,type=volume",
-    "source=claude-code-dind-${devcontainerId},target=/var/lib/docker,type=volume",
+    "source=claudeus-bashhistory-${devcontainerId},target=/commandhistory,type=volume",
+    "source=claudeus-config-${devcontainerId},target=/home/node/.claude,type=volume",
+    "source=claudeus-dind-${devcontainerId},target=/var/lib/docker,type=volume",
     "source=${localWorkspaceFolder}/.devcontainer/URL_whitelist.yml,target=/usr/local/etc/url-whitelist.yml,type=bind"
   ],
   "containerEnv": {

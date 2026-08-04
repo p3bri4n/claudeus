@@ -52,7 +52,7 @@ cd ~/projects/my-project
 claudeus                                # path omitted → uses the current directory
 ```
 
-First run: builds the image (~2-3 min), then `claude` will ask you to authenticate. Auth is kept for subsequent sessions. If you edit the Dockerfile later, remove the stale image (`docker rmi claude-sandbox`) so it gets rebuilt on the next run.
+First run: builds the image (~2-3 min), then `claude` will ask you to authenticate. Auth is kept for subsequent sessions. If you edit the Dockerfile later, remove the stale image (`docker rmi claudeus`) so it gets rebuilt on the next run.
 
 ### Option B — VS Code Devcontainer
 
@@ -74,13 +74,13 @@ The idea: a revocable, narrowly-scoped fine-grained PAT, never your SSH keys, in
 2. **Store it on the host** (outside any repo):
 
    ```bash
-   mkdir -p ~/.config/claude-sandbox
-   cat > ~/.config/claude-sandbox/env <<'EOF'
+   mkdir -p ~/.config/claudeus
+   cat > ~/.config/claudeus/env <<'EOF'
    export GH_TOKEN="github_pat_XXXX"
    export GIT_USER_NAME="Your Name"
    export GIT_USER_EMAIL="you@email.com"
    EOF
-   chmod 600 ~/.config/claude-sandbox/env
+   chmod 600 ~/.config/claudeus/env
    ```
 
 3. **That's it.** `claudeus` sources this file automatically, passes the token into the container, and wires git to it via `gh auth setup-git`. Inside the container, `git clone/push`, `gh pr create`, etc. work out of the box — use **HTTPS** URLs (not `git@github.com:`).
@@ -133,7 +133,7 @@ Officially supported: Ubuntu 24.04 (Noble, kernel 6.8+), 22.04, 20.04, 18.04, De
 
 - `claudeus` and the devcontainer launch the container with `--runtime=sysbox-runc` (no more `--cap-add=NET_ADMIN`/`NET_RAW`: sysbox already grants root the capabilities it needs inside its own user-namespace).
 - An inner `dockerd` starts automatically when the sandbox launches. `docker build` / `docker run` work directly from inside the sandbox.
-- Inner Docker images/layers persist in a dedicated named volume (`claude-sandbox-dind` for the CLI script, `claude-code-dind-${devcontainerId}` for the devcontainer), separate from the host's own `/var/lib/docker`.
+- Inner Docker images/layers persist in a dedicated named volume (`claudeus-dind` for the CLI script, `claudeus-dind-${devcontainerId}` for the devcontainer), separate from the host's own `/var/lib/docker`.
 - **The egress whitelist also applies to nested containers**: `init-firewall-dind.sh` populates the `DOCKER-USER` chain (the insertion point Docker provides for exactly this kind of rule, evaluated before its own permissive bridge rules) with the same `allowed-domains` ipset as the sandbox itself. A container launched from inside the sandbox can't exfiltrate to a domain outside the whitelist either.
 
 ### Known limitation: multiple GPUs

@@ -1,4 +1,4 @@
-# Egress firewall whitelist for claude-sandbox.
+# Egress firewall whitelist for claudeus.
 #
 # Edit this file and relaunch the sandbox — no image rebuild needed, it is
 # bind-mounted read-only into the container and re-read by init-firewall.sh
