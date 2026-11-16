@@ -2,8 +2,14 @@
 # Lance Claude Code en mode autonome dans un conteneur isolé, sans VS Code.
 #
 # Usage :
-#   claudeus <path> [yolo|claude|shell|<commande>]
-#   claudeus [yolo|claude|shell|<commande>]  # utilise le répertoire courant
+#   claudeus [--profile <nom>] <path> [yolo|claude|shell|<commande>]
+#   claudeus [--profile <nom>] [yolo|claude|shell|<commande>]  # répertoire courant
+#
+# Profils d'identité : --profile <nom> charge ~/.config/claudeus/<nom>.env
+# (sinon : <projet>/.claudeus/profile, un nom sur une seule ligne ; sinon
+# ~/.config/claudeus/env comme avant). Un profil a son propre volume de config
+# Claude (claudeus-config-<nom>) : les identifiants Claude d'un profil ne sont
+# pas visibles depuis un autre.
 #
 # Exemples :
 #   claudeus ~/projets/mon-projet            # Claude en --dangerously-skip-permissions (défaut)
@@ -15,30 +21,27 @@
 # Premier lancement : build de l'image (~2-3 min), puis authentification
 # Claude (persistée dans le volume claudeus-config).
 #
-# Accès GitHub (optionnel) : crée ~/.config/claudeus/env contenant
-#   export GH_TOKEN="github_pat_XXXX"        # fine-grained PAT scopé aux repos utiles
+# Accès GitHub (optionnel) : crée ~/.config/claudeus/env (ou <profil>.env) contenant
+#   export GH_TOKEN="github_pat_XXXX"        # PAT fine-grained, ou classique « repo » si
+#                                            # le compte n'est que collaborateur (voir README)
 #   export GIT_USER_NAME="Ton Nom"
 #   export GIT_USER_EMAIL="ton@email.fr"
 # (chmod 600). Le script le source automatiquement s'il existe.
 set -euo pipefail
 
-# Charger la config GitHub si présente
-ENV_FILE="$HOME/.config/claudeus/env"
-[ -f "$ENV_FILE" ] && source "$ENV_FILE"
-
 # Résolution robuste même invoqué via un symlink dans le PATH (ex. ~/.local/bin/claudeus)
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 IMAGE_NAME="claudeus"
 
-# Alias vers les noms de variables attendus dans le conteneur. Nécessaire pour
-# pouvoir utiliser `docker run -e VAR` (sans "=valeur") plus bas : cette forme
-# lit la valeur depuis l'environnement du process docker et la transmet au
-# conteneur via le socket, sans jamais l'écrire dans les argv de `docker run`
-# — sinon visible en clair par n'importe qui sur la machine via `ps aux`.
-export GIT_AUTHOR_NAME="${GIT_USER_NAME:-}"
-export GIT_AUTHOR_EMAIL="${GIT_USER_EMAIL:-}"
-export GIT_COMMITTER_NAME="${GIT_USER_NAME:-}"
-export GIT_COMMITTER_EMAIL="${GIT_USER_EMAIL:-}"
+CONFIG_DIR="${CLAUDEUS_CONFIG_DIR:-$HOME/.config/claudeus}"
+
+# Option --profile <nom> (avant le chemin du projet)
+PROFILE=""
+if [ "${1:-}" = "--profile" ]; then
+    [ $# -ge 2 ] || { echo "ERREUR : --profile demande un nom" >&2; exit 2; }
+    PROFILE="$2"
+    shift 2
+fi
 
 # Premier argument = chemin du projet si c'est un répertoire existant ;
 # sinon on retombe sur le répertoire courant (rétrocompatible avec
@@ -50,6 +53,48 @@ else
     PROJECT_DIR="$(pwd)"
 fi
 PROJECT_NAME="$(basename "$PROJECT_DIR")"
+
+# Profil : --profile > <projet>/.claudeus/profile > aucun (fichier « env »).
+# Le fichier du projet est lisible par l'agent : il ne sert qu'à choisir un nom
+# (validé ci-dessous), jamais un chemin.
+if [ -z "$PROFILE" ] && [ -f "$PROJECT_DIR/.claudeus/profile" ]; then
+    PROFILE="$(head -n 1 "$PROJECT_DIR/.claudeus/profile" | tr -d '[:space:]')"
+fi
+if [ -n "$PROFILE" ] && ! [[ "$PROFILE" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    echo "ERREUR : nom de profil invalide (autorisé : lettres, chiffres, _ et -)" >&2
+    exit 2
+fi
+
+# Charger la config GitHub/Git. Avec un profil, on part d'un environnement vide
+# pour ne jamais hériter d'un GH_TOKEN ou d'une identité du shell appelant.
+if [ -n "$PROFILE" ]; then
+    ENV_FILE="$CONFIG_DIR/$PROFILE.env"
+    if [ ! -f "$ENV_FILE" ]; then
+        echo "ERREUR : profil « $PROFILE » introuvable : $ENV_FILE" >&2
+        exit 2
+    fi
+    unset GH_TOKEN GIT_USER_NAME GIT_USER_EMAIL
+    CONFIG_VOLUME="claudeus-config-$PROFILE"
+else
+    ENV_FILE="$CONFIG_DIR/env"
+    CONFIG_VOLUME="claudeus-config"
+fi
+[ -f "$ENV_FILE" ] && source "$ENV_FILE"
+
+# Identifiants qui ne doivent JAMAIS atteindre le conteneur, quoi qu'ait
+# exporté le shell appelant ou le fichier d'env. (Seules les variables listées
+# par -e plus bas sont transmises ; on les retire quand même explicitement.)
+unset GITHUB_TOKEN GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN SSH_AUTH_SOCK
+
+# Alias vers les noms de variables attendus dans le conteneur. Nécessaire pour
+# pouvoir utiliser `docker run -e VAR` (sans "=valeur") plus bas : cette forme
+# lit la valeur depuis l'environnement du process docker et la transmet au
+# conteneur via le socket, sans jamais l'écrire dans les argv de `docker run`
+# — sinon visible en clair par n'importe qui sur la machine via `ps aux`.
+export GIT_AUTHOR_NAME="${GIT_USER_NAME:-}"
+export GIT_AUTHOR_EMAIL="${GIT_USER_EMAIL:-}"
+export GIT_COMMITTER_NAME="${GIT_USER_NAME:-}"
+export GIT_COMMITTER_EMAIL="${GIT_USER_EMAIL:-}"
 
 # Build de l'image si absente
 if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
@@ -66,17 +111,21 @@ else
     CMD=("$@")
 fi
 
+# -t seulement si stdin est un terminal (permet l'usage non interactif : CI, selftest)
+TTY_ARGS=()
+[ -t 0 ] && TTY_ARGS=(-t)
+
 # --runtime=sysbox-runc : isolation utilisateur complète, permet un dockerd
 # interne (Docker-in-Docker) sans --privileged et sans cap-add (sysbox donne
 # déjà les capacités nécessaires à root dans son user-namespace).
 # Volume nommé pour ~/.claude : auth persistée entre les sessions
 # Volume nommé pour /var/lib/docker : images/layers du DinD persistées
 # Seul le dossier projet courant est monté — rien d'autre de l'hôte
-docker run -it --rm \
-    --name "claudeus-${PROJECT_NAME}-$$" \
+docker run -i "${TTY_ARGS[@]}" --rm \
+    --name "claudeus-${PROFILE:+$PROFILE-}${PROJECT_NAME}-$$" \
     --runtime=sysbox-runc \
     -v "$PROJECT_DIR":/workspace \
-    -v claudeus-config:/home/node/.claude \
+    -v "$CONFIG_VOLUME":/home/node/.claude \
     -v claudeus-history:/commandhistory \
     -v claudeus-dind:/var/lib/docker \
     -v "$SCRIPT_DIR/.devcontainer/URL_whitelist.yml":/usr/local/etc/url-whitelist.yml:ro \

@@ -13,6 +13,7 @@ An isolated Docker environment for running Claude Code with `--dangerously-skip-
   - [Option A — Plain Docker](#option-a--plain-docker-recommended-for-cli-use)
   - [Option B — VS Code Devcontainer](#option-b--vs-code-devcontainer)
 - [GitHub access](#github-access-scoped-token-no-ssh-key)
+- [Identity profiles](#identity-profiles)
 - [Customizing the egress whitelist](#customizing-the-egress-whitelist-url_whitelistyml)
 - [Docker-in-Docker (sysbox)](#docker-in-docker-sysbox)
 - [Python customization](#python-customization)
@@ -101,6 +102,31 @@ The idea: a revocable, narrowly-scoped token, never your SSH keys, inside the co
 For the VS Code devcontainer: export `GH_TOKEN` in your shell before launching VS Code (`devcontainer.json` picks it up via `${localEnv:GH_TOKEN}`).
 
 If in doubt, or if the agent behaves suspiciously: revoke the PAT on GitHub, all access is cut instantly.
+
+## Identity profiles
+
+Several identities (e.g. your own, and a dedicated "machine" account for an agent) can coexist:
+
+```bash
+# ~/.config/claudeus/machine.env  (chmod 600) — same format as `env`
+export GH_TOKEN="ghp_XXXX"
+export GIT_USER_NAME="Machine account"
+export GIT_USER_EMAIL="machine@example.com"
+```
+
+```bash
+claudeus --profile machine ~/projects/my-project    # explicit
+echo machine > ~/projects/my-project/.claudeus/profile   # or: the project picks a name
+claudeus ~/projects/my-project
+```
+
+- Precedence: `--profile` > `<project>/.claudeus/profile` (one name, nothing else) > no profile (`~/.config/claudeus/env`, unchanged behaviour).
+- A profile name is `[A-Za-z0-9_-]+`; a missing `<name>.env` is an error (never a silent fallback to another identity).
+- With a profile, `GH_TOKEN` / `GIT_USER_*` of the calling shell are ignored: only the profile file counts.
+- Each profile gets its **own Claude config volume** (`claudeus-config-<name>`; without profile: `claudeus-config`, as before), so Claude credentials of one identity are never visible from another. History and inner-Docker volumes stay shared.
+- `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN` and `SSH_AUTH_SOCK` are explicitly unset by the script and never passed to the container, even if the shell or the env file defines them.
+- `CLAUDEUS_CONFIG_DIR` overrides `~/.config/claudeus` (used for tests).
+- Security note: `.claudeus/profile` lives in the project, which the agent can write. It is only read at launch, so an agent could pick *another existing profile of yours* for the next session. Until `.claudeus/` is mounted read-only (see later steps) review it, or pass `--profile` explicitly.
 
 ## Customizing the egress whitelist (`URL_whitelist.yml`)
 
