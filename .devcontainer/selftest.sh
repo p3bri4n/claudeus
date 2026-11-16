@@ -28,6 +28,15 @@ if curl -sS --connect-timeout 5 -o /dev/null https://example.com 2>/dev/null; th
 else
     pass "domaine hors liste bloqué (example.com)"
 fi
+if [ -f /usr/local/etc/github-meta.json ]; then
+    if (: >> /usr/local/etc/github-meta.json) 2>/dev/null; then
+        fail "les plages GitHub montées sont inscriptibles"
+    else
+        pass "plages GitHub fournies par l'hôte, en lecture seule"
+    fi
+else
+    note "plages GitHub non fournies par l'hôte (lecture réseau par le conteneur)"
+fi
 [ -f /usr/local/etc/url-whitelist.yml ] || fail "whitelist montée introuvable"
 if (: >> /usr/local/etc/url-whitelist.yml) 2>/dev/null; then
     fail "la whitelist montée est inscriptible"

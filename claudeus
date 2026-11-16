@@ -182,6 +182,38 @@ if [ -f "$PROJECT_WHITELIST" ]; then
     echo ">> Whitelist : base + $PROJECT_WHITELIST ($(grep -c '^  - ' "$MERGED_WHITELIST") entrées)"
 fi
 
+# Plages IP GitHub : lues ICI, sur l'hôte, puis montées en lecture seule. Évite que
+# chaque démarrage du conteneur consomme le quota anonyme de api.github.com/meta
+# (60 req/h par IP) : `gh` de l'hôte est authentifié (5000 req/h), et un cache
+# (24 h) évite même l'appel. Si la lecture échoue, un cache périmé est utilisé
+# avec un avertissement ; sans cache, le conteneur retombe sur sa propre lecture.
+META_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/claudeus"
+META_CACHE="$META_CACHE_DIR/github-meta.json"
+GH_META_ARGS=()
+meta_valid() { jq -e '.web and .api and .git' "$1" >/dev/null 2>&1; }
+if ! { [ -s "$META_CACHE" ] && meta_valid "$META_CACHE" && [ -z "$(find "$META_CACHE" -mmin +1440 2>/dev/null)" ]; }; then
+    mkdir -p "$META_CACHE_DIR"
+    META_TMP="$(mktemp "$META_CACHE_DIR/meta.XXXXXX")"
+    # gh (authentifié) si dispo, sinon curl anonyme. Jamais d'affichage du jeton.
+    if { command -v gh >/dev/null 2>&1 && gh api meta > "$META_TMP" 2>/dev/null; } \
+       || curl -fsS --connect-timeout 10 --max-time 30 https://api.github.com/meta > "$META_TMP" 2>/dev/null; then
+        :
+    fi
+    if meta_valid "$META_TMP"; then
+        chmod 0644 "$META_TMP"; mv -f "$META_TMP" "$META_CACHE"
+    else
+        rm -f "$META_TMP"
+        if [ -s "$META_CACHE" ] && meta_valid "$META_CACHE"; then
+            echo "AVERTISSEMENT : lecture des plages GitHub impossible, cache périmé utilisé ($META_CACHE)" >&2
+        fi
+    fi
+fi
+if [ -s "$META_CACHE" ] && meta_valid "$META_CACHE"; then
+    GH_META_ARGS=(-v "$META_CACHE":/usr/local/etc/github-meta.json:ro)
+else
+    echo "AVERTISSEMENT : plages GitHub non lues sur l'hôte ; le conteneur les lira lui-même (quota anonyme)" >&2
+fi
+
 # Chemins protégés dans /workspace, déclarés dans <projet>/.claudeus/ :
 #   readonly-paths : montés :ro par-dessus /workspace
 #   hidden-paths   : masqués (fichier -> /dev/null en :ro ; dossier -> dossier vide :ro)
@@ -303,6 +335,7 @@ docker run -i "${TTY_ARGS[@]}" --rm \
     -v "$PROJECT_DIR":/workspace \
     "${PROTECT_ARGS[@]}" \
     "${SELFTEST_ARGS[@]}" \
+    ${GH_META_ARGS[@]+"${GH_META_ARGS[@]}"} \
     -v "$CONFIG_VOLUME":/home/node/.claude \
     -v claudeus-history:/commandhistory \
     -v claudeus-dind:/var/lib/docker \
