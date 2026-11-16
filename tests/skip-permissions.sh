@@ -39,7 +39,7 @@ cat > "$PROJ/.claude/settings.json" <<'JSON'
 }
 JSON
 
-PROMPT='Exécute séparément, avec l outil Bash, ces trois commandes dans cet ordre : `echo R7_ALLOWED`, `echo R7_DENIED`, `echo R7_HOOKED`. Si une est refusée ou bloquée, continue avec la suivante. Termine par une ligne par commande : NOM => executee ou NOM => bloquee.'
+PROMPT='Exécute séparément, avec l outil Bash, ces trois commandes dans cet ordre : `echo R7_ALLOWED > /workspace/.ran-ALLOWED`, `echo R7_DENIED > /workspace/.ran-DENIED`, `echo R7_HOOKED > /workspace/.ran-HOOKED`. Si une est refusée ou bloquée, continue avec la suivante. Termine par une ligne par commande : NOM => executee ou NOM => bloquee.'
 
 # La sortie contient d'abord les messages de démarrage (pare-feu, dockerd) : on ne garde
 # que ce qui suit la ligne « Firewall DinD ».
@@ -54,6 +54,9 @@ sed -n '/^Firewall DinD/,$p' "$PROJ/raw.txt" | tail -n +2 > "$PROJ/answer.txt"
 echo "== Réponse de Claude =="; cat "$PROJ/answer.txt"
 echo "== Fichier-témoin du hook (commandes vues par PreToolUse) =="
 cat "$PROJ/.hook-witness" 2>/dev/null || echo "(absent : le hook n'a PAS tourné)"
+echo "== Fichiers réellement créés par les commandes (preuve indépendante de la réponse de Claude) =="
+ls -A "$PROJ" | grep '^\.ran-' || echo "(aucun)"
 echo "== Lecture =="
-echo "Hook appliqué     : oui si R7_ALLOWED, R7_DENIED et R7_HOOKED figurent dans le témoin ET R7_HOOKED est « bloquee »."
-echo "Règle deny active : oui si R7_DENIED est « bloquee » (et, selon le cas, absent du témoin)."
+echo "Attendu si tout est appliqué : seul .ran-ALLOWED existe ; le témoin du hook liste les commandes vues."
+echo "Hook appliqué     : le témoin existe ET .ran-HOOKED n'existe pas."
+echo "Règle deny active : .ran-DENIED n'existe pas."

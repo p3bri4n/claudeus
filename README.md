@@ -244,7 +244,7 @@ sysbox's GPU passthrough currently has a documented bug with **multi-GPU hosts**
 
 ## Does `--dangerously-skip-permissions` still honour a project's `deny` rules and hooks?
 
-**Not confirmed — to run on your machine.** I could not run the test: the Claude OAuth session stored in the `claudeus-config` volume had expired ("OAuth session expired and could not be refreshed") and renewing it needs an interactive login.
+**Yes, both are honoured (tested 2026-11-16, Claude Code 2.1.325, `claude -p --dangerously-skip-permissions`, model haiku).** A project's `permissions.deny` rule blocked its command, and a `PreToolUse` hook ran for every Bash call and blocked another one (exit code 2). Evidence independent of what the model says: of three commands that each create a file, only the unrestricted one's file exists; the hook's witness file lists all three commands. One run per configuration, one tool (Bash), one Claude Code version: re-run the test after upgrading.
 
 [`tests/skip-permissions.sh`](tests/skip-permissions.sh) generates a throw-away project in a temp directory with a `permissions.deny` rule on one harmless `echo`, a `PreToolUse` hook that writes a witness file and blocks another harmless `echo`, then runs `claude -p --dangerously-skip-permissions` through `claudeus` and prints what ran and what the hook saw:
 
@@ -253,7 +253,7 @@ claudeus ~/some/dir claude        # once, if needed: log in again, then exit
 tests/skip-permissions.sh [--profile <name>]
 ```
 
-Record the result here once known (date, Claude Code version, which of the three commands ran, whether the witness file exists). Until then, do not rely on project `deny` rules or hooks as a barrier under yolo mode: use the read-only mounts, the firewall and server-side controls instead.
+**Still, treat them as a guard against mistakes, not a barrier.** `.claude/settings.json` and the hook scripts live in `/workspace`, which the agent can write: unless they are covered by `readonly-paths` (add `.claude`), an agent can edit its own rules for the next session, and `.git/config` cannot be read-only (see above). The real barriers are the mounts, the firewall and server-side controls.
 
 ## Python customization
 
