@@ -5,6 +5,9 @@
 #   CLAUDEUS_SELFTEST_RO      chemins déclarés en lecture seule (un par ligne)
 #   CLAUDEUS_SELFTEST_HIDDEN  chemins masqués (un par ligne)
 set -u
+# --require-github : l'absence de GH_TOKEN devient un échec (à utiliser pour valider une identité).
+REQUIRE_GITHUB=0
+[ "${1:-}" = "--require-github" ] && REQUIRE_GITHUB=1
 cd /workspace || exit 1
 
 n=0
@@ -82,14 +85,19 @@ while IFS= read -r p; do
 done <<< "${CLAUDEUS_SELFTEST_HIDDEN:-}"
 
 echo "== GitHub =="
-[ -n "${GH_TOKEN:-}" ] || fail "GH_TOKEN absent : aucun profil/identité chargé"
-login=$(timeout 30 gh api user --jq .login 2>/dev/null) || fail "gh api user a échoué (jeton invalide, expiré ou réseau)"
-[ -n "$login" ] || fail "gh api user n'a renvoyé aucun login"
-pass "gh api user → compte « $login »"
-if env -u GH_TOKEN gh auth status >/dev/null 2>&1; then
-    fail "gh a une connexion stockée derrière GH_TOKEN"
+if [ -z "${GH_TOKEN:-}" ]; then
+    [ "$REQUIRE_GITHUB" = 0 ] || fail "GH_TOKEN absent (--require-github demandé)"
+    note "SKIP : GH_TOKEN absent, contrôles GitHub non exécutés (GitHub non configuré)"
+    SKIPPED=" ; GitHub non vérifié"
 else
-    pass "aucune connexion gh stockée (sans GH_TOKEN, gh est déconnecté)"
+    login=$(timeout 30 gh api user --jq .login 2>/dev/null) || fail "gh api user a échoué (jeton invalide, expiré ou réseau)"
+    [ -n "$login" ] || fail "gh api user n'a renvoyé aucun login"
+    pass "gh api user → compte « $login »"
+    if env -u GH_TOKEN gh auth status >/dev/null 2>&1; then
+        fail "gh a une connexion stockée derrière GH_TOKEN"
+    else
+        pass "aucune connexion gh stockée (sans GH_TOKEN, gh est déconnecté)"
+    fi
 fi
 
-printf '\nselftest : OK (%d contrôles)\n' "$n"
+printf '\nselftest : OK (%d contrôles%s)\n' "$n" "${SKIPPED:-}"
