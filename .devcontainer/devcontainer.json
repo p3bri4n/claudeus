@@ -3,8 +3,7 @@
   "build": {
     "dockerfile": "Dockerfile",
     "args": {
-      "TZ": "${localEnv:TZ:Europe/Paris}",
-      "CLAUDE_CODE_VERSION": "latest"
+      "TZ": "${localEnv:TZ:Europe/Paris}"
     }
   },
   "runArgs": [

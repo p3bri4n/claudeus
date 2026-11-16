@@ -3,7 +3,11 @@ FROM node:20
 ARG TZ=Europe/Paris
 ENV TZ="$TZ"
 
-ARG CLAUDE_CODE_VERSION=latest
+# Versions exactes (reproductibilité). Pour changer :
+#   docker build --build-arg CLAUDE_CODE_VERSION=x.y.z --build-arg MISE_VERSION=vYYYY.M.P -t claudeus .devcontainer
+# (ou : CLAUDE_CODE_VERSION=x.y.z claudeus <projet>, après `docker rmi claudeus`)
+ARG CLAUDE_CODE_VERSION=2.1.325
+ARG MISE_VERSION=v2026.11.9
 
 # Outils de base + iptables/ipset pour le firewall + Python
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -80,6 +84,13 @@ ENV VISUAL=nano
 
 # uv : gestionnaire de paquets/venv Python rapide
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# mise : gestionnaire de versions d'outils générique. Claudeus n'embarque AUCUN
+# outil de projet : chaque projet lance lui-même `mise install`. Les shims passent
+# devant /usr/local/bin dans le PATH, de sorte qu'un node/python installé par mise
+# remplace celui de l'image (node 20, python 3.11) pour ce projet.
+RUN curl -fsSL https://mise.run | MISE_VERSION=${MISE_VERSION} sh
+ENV PATH=/home/node/.local/share/mise/shims:$PATH
 
 # Claude Code
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}

@@ -18,6 +18,8 @@ An isolated Docker environment for running Claude Code with `--dangerously-skip-
 - [Read-only and hidden paths](#read-only-and-hidden-paths-projectclaudeus)
 - [Self-test](#self-test-claudeus-selftest)
 - [Docker-in-Docker (sysbox)](#docker-in-docker-sysbox)
+- [Tools and reproducibility](#tools-and-reproducibility)
+- [Do `deny` rules and hooks survive yolo mode?](#does---dangerously-skip-permissions-still-honour-a-projects-deny-rules-and-hooks)
 - [Python customization](#python-customization)
 - [Security considerations](#security-considerations)
 
@@ -229,6 +231,29 @@ Officially supported: Ubuntu 24.04 (Noble, kernel 6.8+), 22.04, 20.04, 18.04, De
 ### Known limitation: multiple GPUs
 
 sysbox's GPU passthrough currently has a documented bug with **multi-GPU hosts** ([nestybox/sysbox#901](https://github.com/nestybox/sysbox/issues/901)): GPU access works reliably on single-GPU machines but is not reliably supported when the host has more than one GPU. If your workload needs multi-GPU access from inside the sandbox, this is not currently guaranteed to work — test before relying on it, and consider running without sysbox (and without inner DinD) for multi-GPU workloads.
+
+## Tools and reproducibility
+
+- **Pinned versions**: the image builds Claude Code `2.1.325` and `mise` `v2026.11.9` (no more `latest`). Change them with build arguments: `docker rmi claudeus; CLAUDE_CODE_VERSION=x.y.z claudeus <project>` or `docker build --build-arg CLAUDE_CODE_VERSION=x.y.z --build-arg MISE_VERSION=vYYYY.M.P -t claudeus .devcontainer`. (`mise` is installed through its official install script, pinned to that version, not checksum-verified here.)
+- **`mise`** is installed as a generic tool; Claudeus ships none of a project's tools. Each project runs its own `mise install` (or `mise use node@22`). Its shims come first in `PATH`, so a mise-managed `node`/`python3` replaces the image's Node 20 / Python 3.11 for that project (tested: `mise use node@22` → `node v22`, and `claude` still runs under it).
+- **mise needs network access that the default whitelist does not give**, by design (only what a project needs). Add them in `<project>/.claudeus/URL_whitelist.yml`:
+  - Node: `nodejs.org`.
+  - Python: `mise-versions.jdx.dev`, `release-assets.githubusercontent.com`, `objects.githubusercontent.com` (tested with `python@3.12`; without them the install fails with "Network is unreachable").
+  - Other tools: check with `MISE_VERBOSE=1 mise install <tool>` which hosts it contacts. The firewall resolves IPs at startup, so a tool served by a rotating CDN may need `sudo init-firewall.sh` again.
+- **What can get in the way of replacing Node/Python**: (1) Claude Code itself runs on whatever `node` comes first in `PATH`; replacing it with a version Claude Code does not support (it needs a recent Node; 20 and 22 were tested) breaks `claude`. (2) `mise` asks to trust a project's `mise.toml` (`mise trust`), and the file lives in the writable workspace. (3) Base-image tools that call `python3` (none of Claudeus's scripts do) would see the mise one.
+
+## Does `--dangerously-skip-permissions` still honour a project's `deny` rules and hooks?
+
+**Not confirmed — to run on your machine.** I could not run the test: the Claude OAuth session stored in the `claudeus-config` volume had expired ("OAuth session expired and could not be refreshed") and renewing it needs an interactive login.
+
+[`tests/skip-permissions.sh`](tests/skip-permissions.sh) generates a throw-away project in a temp directory with a `permissions.deny` rule on one harmless `echo`, a `PreToolUse` hook that writes a witness file and blocks another harmless `echo`, then runs `claude -p --dangerously-skip-permissions` through `claudeus` and prints what ran and what the hook saw:
+
+```bash
+claudeus ~/some/dir claude        # once, if needed: log in again, then exit
+tests/skip-permissions.sh [--profile <name>]
+```
+
+Record the result here once known (date, Claude Code version, which of the three commands ran, whether the witness file exists). Until then, do not rely on project `deny` rules or hooks as a barrier under yolo mode: use the read-only mounts, the firewall and server-side controls instead.
 
 ## Python customization
 

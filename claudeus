@@ -243,7 +243,10 @@ fi
 # Build de l'image si absente
 if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
     echo ">> Build de l'image $IMAGE_NAME..."
-    docker build -t "$IMAGE_NAME" "$SCRIPT_DIR/.devcontainer"
+    BUILD_ARGS=()
+    [ -n "${CLAUDE_CODE_VERSION:-}" ] && BUILD_ARGS+=(--build-arg "CLAUDE_CODE_VERSION=$CLAUDE_CODE_VERSION")
+    [ -n "${MISE_VERSION:-}" ] && BUILD_ARGS+=(--build-arg "MISE_VERSION=$MISE_VERSION")
+    docker build "${BUILD_ARGS[@]}" -t "$IMAGE_NAME" "$SCRIPT_DIR/.devcontainer"
 fi
 
 SELFTEST_ARGS=()
