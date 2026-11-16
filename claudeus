@@ -56,10 +56,29 @@ fi
 PROJECT_NAME="$(basename "$PROJECT_DIR")"
 
 # Profil : --profile > <projet>/.claudeus/profile > aucun (fichier « env »).
-# Le fichier du projet est lisible par l'agent : il ne sert qu'à choisir un nom
-# (validé ci-dessous), jamais un chemin.
+# Le fichier du projet est écrit par le projet (donc potentiellement par l'agent) :
+# il ne peut choisir qu'un profil que L'HÔTE a autorisé pour ce projet, dans
+# <config>/allowed-profiles (une ligne par projet : « <chemin absolu> <profil>[,<profil>...] »).
+# --profile, tapé par l'humain, n'est pas soumis à cette liste.
 if [ -z "$PROFILE" ] && [ -f "$PROJECT_DIR/.claudeus/profile" ]; then
     PROFILE="$(head -n 1 "$PROJECT_DIR/.claudeus/profile" | tr -d '[:space:]')"
+    if [ -n "$PROFILE" ]; then
+        ALLOWED_FILE="$CONFIG_DIR/allowed-profiles"
+        PROJECT_REAL_P="$(cd "$PROJECT_DIR" && pwd -P)"
+        allowed=""
+        if [ -f "$ALLOWED_FILE" ]; then
+            while read -r ap plist; do
+                [[ "$ap" == \#* || -z "$ap" ]] && continue
+                [ "$ap" = "$PROJECT_REAL_P" ] && [[ ",$plist," == *",$PROFILE,"* ]] && allowed=1
+            done < "$ALLOWED_FILE"
+        fi
+        if [ -z "$allowed" ]; then
+            echo "ERREUR : le projet demande le profil « $PROFILE » (.claudeus/profile), mais il n'est pas autorisé pour $PROJECT_REAL_P." >&2
+            echo "  Autorisez-le côté hôte : echo \"$PROJECT_REAL_P $PROFILE\" >> $ALLOWED_FILE" >&2
+            echo "  ou passez --profile $PROFILE explicitement." >&2
+            exit 2
+        fi
+    fi
 fi
 if [ -n "$PROFILE" ] && ! [[ "$PROFILE" =~ ^[A-Za-z0-9_-]+$ ]]; then
     echo "ERREUR : nom de profil invalide (autorisé : lettres, chiffres, _ et -)" >&2
