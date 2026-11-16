@@ -64,19 +64,32 @@ Then open the project in VS Code → "Reopen in Container". Once inside, open a 
 
 ## GitHub access (scoped token, no SSH key)
 
-The idea: a revocable, narrowly-scoped fine-grained PAT, never your SSH keys, inside the container.
+The idea: a revocable, narrowly-scoped token, never your SSH keys, inside the container.
 
-1. **Create the token**: github.com → Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token.
+1. **Create the token.** Which kind depends on who owns the repository the agent works on:
+
+| Case | Token type | Why |
+|---|---|---|
+| (a) The token's account **owns** the repo (or the repo belongs to an org that allows fine-grained PATs) | **Fine-grained PAT** | Can be limited to selected repositories and minimal permissions. |
+| (b) The token's account is only an **outside/repository collaborator** on someone else's personal repo (e.g. a dedicated "machine" account with Write access) | **Classic PAT**, scope `repo` only | GitHub documents that a fine-grained PAT can only reach repositories the token's user owns or where an organisation resource owner grants access — personal repos of another user, where you are a mere collaborator, are out of reach. |
+
+**Case (a) — fine-grained PAT**: github.com → Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token.
    - Repository access: "Only select repositories" → only the repos you need
    - Permissions: Contents (Read and write), Pull requests (Read and write), Issues if needed
    - Expiration: 30 or 90 days
+
+**Case (b) — classic PAT**: Settings → Developer settings → Personal access tokens → Tokens (classic).
+   - Scope: `repo` only. **Never `workflow`.** (`public_repo` may be enough for a *public* repository — untested here; try it first.)
+   - Expiration: short (7 to 30 days).
+
+> **Warning — a classic `repo` token is a ceiling, not a filter.** It grants access to **every** repository the account can reach (all its own repos, and every repo where it is a collaborator or org member), not just the one you have in mind. Only use it with an account that has access to nothing else — a dedicated account with a single collaboration is the intended setup. If the account can see other private repos, use another approach.
 
 2. **Store it on the host** (outside any repo):
 
    ```bash
    mkdir -p ~/.config/claudeus
    cat > ~/.config/claudeus/env <<'EOF'
-   export GH_TOKEN="github_pat_XXXX"
+   export GH_TOKEN="github_pat_XXXX"   # or ghp_XXXX for a classic token
    export GIT_USER_NAME="Your Name"
    export GIT_USER_EMAIL="you@email.com"
    EOF
@@ -180,5 +193,6 @@ This significantly reduces the blast radius but does not eliminate the risk — 
 - **The container protects the host, not what's inside the container.** A malicious or compromised project can read everything mounted into it, including Claude's own credentials in `~/.claude`. Reserve this setup for trusted repositories.
 - **The whitelist is a domain list, not content inspection.** Anything reachable *within* a whitelisted domain (e.g. an attacker-controlled npm package, a malicious PyPI release, a compromised Hugging Face repo) is still reachable — the firewall stops exfiltration to new destinations, it doesn't vet the content coming from allowed ones.
 - **Data already inside the container can leave through whitelisted channels.** If GitHub is whitelisted (it needs to be, for git operations) and the agent's scoped PAT has write access, a sufficiently manipulated agent could still push data to a repo it has access to. Keep the PAT's repo scope as narrow as possible.
+- **GitHub is whitelisted as a whole.** The firewall allows every IP range published by `api.github.com/meta`, not just the repo you work on. A token that can write anywhere else (see the classic `repo` warning above) lets a manipulated agent push data to *another* repository. The firewall cannot tell repositories apart: the only real limit is what the token itself can reach.
 - **Never mount host secrets** (`~/.ssh`, `~/.aws`, production `.env` files). Prefer scoped, short-lived tokens (e.g. a fine-grained GitHub PAT).
 - **No system is 100% immune.** Isolation reduces the blast radius; it does not eliminate it. Monitor what Claude does, especially on long-running tasks: `git diff` before committing, container logs if something looks off.
