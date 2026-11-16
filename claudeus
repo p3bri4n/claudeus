@@ -149,6 +149,11 @@ docker run -i "${TTY_ARGS[@]}" --rm \
             exit 1
         fi
         sudo /usr/local/bin/init-firewall-dind.sh
+        # Remotes SSH -> HTTPS, en config GLOBALE du conteneur (~/.gitconfig du
+        # conteneur) : le .git/config du dépôt monté reste intact. Le conteneur
+        # ne contient pas de clé SSH ; seul le jeton (via gh) authentifie.
+        git config --global url."https://github.com/".insteadOf git@github.com:
+        git config --global --add url."https://github.com/".insteadOf ssh://git@github.com/
         { [ -n "${GH_TOKEN:-}" ] && gh auth setup-git 2>/dev/null || true; }
         exec "$@"
     ' -- "${CMD[@]}"

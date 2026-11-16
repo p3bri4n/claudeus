@@ -37,6 +37,6 @@
   },
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",
   "workspaceFolder": "/workspace",
-  "postStartCommand": "sudo /usr/local/bin/init-firewall.sh && (sudo dockerd >/tmp/dockerd.log 2>&1 &) && for i in $(seq 1 30); do [ -S /var/run/docker.sock ] && break; sleep 0.5; done && sudo /usr/local/bin/init-firewall-dind.sh && { [ -n \"$GH_TOKEN\" ] && gh auth setup-git || true; }",
+  "postStartCommand": "sudo /usr/local/bin/init-firewall.sh && (sudo dockerd >/tmp/dockerd.log 2>&1 &) && for i in $(seq 1 30); do [ -S /var/run/docker.sock ] && break; sleep 0.5; done && sudo /usr/local/bin/init-firewall-dind.sh && git config --global url.\"https://github.com/\".insteadOf git@github.com: && git config --global --add url.\"https://github.com/\".insteadOf ssh://git@github.com/ && { [ -n \"$GH_TOKEN\" ] && gh auth setup-git || true; }",
   "waitFor": "postStartCommand"
 }

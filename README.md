@@ -84,7 +84,7 @@ The idea: a revocable, narrowly-scoped fine-grained PAT, never your SSH keys, in
    chmod 600 ~/.config/claudeus/env
    ```
 
-3. **That's it.** `claudeus` sources this file automatically, passes the token into the container, and wires git to it via `gh auth setup-git`. Inside the container, `git clone/push`, `gh pr create`, etc. work out of the box — use **HTTPS** URLs (not `git@github.com:`).
+3. **That's it.** `claudeus` sources this file automatically, passes the token into the container, and wires git to it via `gh auth setup-git`. Inside the container, `git clone/push`, `gh pr create`, etc. work out of the box. A project `remote` in SSH form (`git@github.com:` or `ssh://git@github.com/`) is rewritten to HTTPS by a **global git config inside the container** (`url."https://github.com/".insteadOf`, written at startup); the repository's own `.git/config` on the host is left untouched. The container has no SSH key, so only the token authenticates: pushes are performed as the account that owns `GH_TOKEN` (check with `gh api user --jq .login`).
 
 For the VS Code devcontainer: export `GH_TOKEN` in your shell before launching VS Code (`devcontainer.json` picks it up via `${localEnv:GH_TOKEN}`).
 
