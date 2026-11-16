@@ -117,7 +117,7 @@ claudeus ~/projects/my-project
 - Each profile gets its **own Claude config volume** (`claudeus-config-<name>`; without profile: `claudeus-config`, as before), so Claude credentials of one identity are never visible from another. History and inner-Docker volumes stay shared.
 - `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN` and `SSH_AUTH_SOCK` are explicitly unset by the script and never passed to the container, even if the shell or the env file defines them.
 - `CLAUDEUS_CONFIG_DIR` overrides `~/.config/claudeus` (used for tests).
-- Security note: `.claudeus/profile` lives in the project, which the agent can write. It is only read at launch, so an agent could pick *another existing profile of yours* for the next session. Until `.claudeus/` is mounted read-only (see later steps) review it, or pass `--profile` explicitly.
+- **Allowed profiles (host side)**: `.claudeus/profile` lives in the project, which the agent can write, so it can only select a profile that *you* authorised for that project in `~/.config/claudeus/allowed-profiles`, one line per project: `<absolute project path> <profile>[,<profile>...]` (`#` comments allowed). Otherwise `claudeus` refuses (exit 2) and prints the line to add. `--profile`, typed by you, is not subject to this list. Paths are compared after resolving symlinks.
 
 ## Customizing the egress whitelist (`URL_whitelist.yml`)
 
