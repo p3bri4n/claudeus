@@ -296,6 +296,9 @@ docker run -i "${TTY_ARGS[@]}" --rm \
     -w /workspace \
     "$IMAGE_NAME" \
     bash -c '
+        # Fail-closed : si le pare-feu ne se met pas en place, on ne lance RIEN (sans
+        # set -e, la session démarrait quand même, réseau ouvert).
+        set -e
         sudo /usr/local/bin/init-firewall.sh
         sudo dockerd >/tmp/dockerd.log 2>&1 &
         for i in $(seq 1 30); do

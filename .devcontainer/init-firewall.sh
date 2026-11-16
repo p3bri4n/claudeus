@@ -61,26 +61,37 @@ fi  # fin du bloc premier démarrage
 ipset create "$SET" hash:net
 
 # Plages IP GitHub (web + api + git)
+# api.github.com/meta est limité à 60 requêtes/heure par IP sans authentification
+# (le script tourne sous sudo : GH_TOKEN n'y est pas transmis). Quota épuisé =
+# réponse « rate limit » : au premier démarrage on s'arrête avec un message clair ;
+# en relance on garde les plages GitHub de l'ipset actuel plutôt que d'échouer.
 echo "Récupération des plages IP GitHub..."
 gh_ranges=$(curl -s --connect-timeout 10 --max-time 30 https://api.github.com/meta || true)
-if [ -z "$gh_ranges" ]; then
-    echo "ERREUR : impossible de récupérer les plages IP GitHub"
-    exit 1
-fi
 
-if ! echo "$gh_ranges" | jq -e '.web and .api and .git' >/dev/null; then
-    echo "ERREUR : réponse GitHub incomplète"
-    exit 1
-fi
-
-echo "Ajout des plages GitHub..."
-while read -r cidr; do
-    if [[ ! "$cidr" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$ ]]; then
-        echo "ERREUR : CIDR invalide depuis GitHub meta : $cidr"
+if ! echo "$gh_ranges" | jq -e '.web and .api and .git' >/dev/null 2>&1; then
+    gh_msg=$(echo "$gh_ranges" | jq -r '.message // empty' 2>/dev/null | sed -E 's/ for [0-9a-fA-F.:]+//' | cut -c1-60 || true)
+    if [ "$REFRESH" = 1 ]; then
+        echo "AVERTISSEMENT : plages GitHub non rafraîchies (${gh_msg:-réponse vide ou incomplète}) ; plages de l'ipset actuel conservées"
+        while read -r cidr; do
+            ipset add "$SET" "$cidr" 2>/dev/null || true
+        done < <(ipset save allowed-domains | awk '$1=="add" && $3 ~ /\// {print $3}')
+        gh_ranges=""
+    else
+        echo "ERREUR : impossible de lire les plages IP GitHub (${gh_msg:-réponse vide ou incomplète})"
         exit 1
     fi
-    ipset add "$SET" "$cidr"
-done < <(echo "$gh_ranges" | jq -r '(.web + .api + .git)[]' | aggregate -q)
+fi
+
+if [ -n "$gh_ranges" ]; then
+    echo "Ajout des plages GitHub..."
+    while read -r cidr; do
+        if [[ ! "$cidr" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$ ]]; then
+            echo "ERREUR : CIDR invalide depuis GitHub meta : $cidr"
+            exit 1
+        fi
+        ipset add "$SET" "$cidr"
+    done < <(echo "$gh_ranges" | jq -r '(.web + .api + .git)[]' | aggregate -q)
+fi
 
 # Domaines autorisés — lus depuis URL_whitelist.yml (édition à chaud, pas de
 # rebuild d'image nécessaire : voir ce fichier pour le format).

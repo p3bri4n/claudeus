@@ -156,6 +156,8 @@ Unknown keys and anything that is not a plain host name are refused (exit code 2
 
 `init-firewall.sh` can be re-run mid-session (for rotating CDN IPs): it then only rebuilds the IP set and swaps it in atomically, leaving the rules untouched.
 
+**GitHub API quota**: every container start and every re-run reads `https://api.github.com/meta` *unauthenticated* (60 requests/hour per public IP, shared with everything else on your network). When the quota is exhausted a start fails with `ERREUR : impossible de lire les plages IP GitHub (API rate limit exceeded…)` — wait for the reset — while a mid-session re-run keeps the current GitHub ranges and only warns.
+
 Golden rule: only whitelist what the project actually needs. Every domain added here is a potential exfiltration channel, even under prompt injection.
 
 Note: the firewall resolves domains to IPs at container startup. For CDNs with highly dynamic IPs, you may need to re-run `sudo /usr/local/bin/init-firewall.sh` mid-session.
@@ -197,7 +199,7 @@ Starts the container exactly like a normal session and checks, stopping at the f
 
 - no `~/.ssh`, no `~/.config/gh`; `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `SSH_AUTH_SOCK` unset;
 - a domain outside the whitelist (`https://example.com`) is unreachable; the mounted whitelist is read-only;
-- re-running `sudo init-firewall.sh` twice leaves the iptables rules byte-for-byte identical to those of the initial setup, still uses the mounted whitelist file, and `sudo WHITELIST_FILE=… init-firewall.sh` is refused;
+- re-running `sudo init-firewall.sh` leaves the iptables rules byte-for-byte identical to those of the initial setup, still uses the mounted whitelist file, and `sudo WHITELIST_FILE=… init-firewall.sh` is refused;
 - `.claudeus/` and every `readonly-paths` entry is not writable; every `hidden-paths` entry is empty/unreadable;
 - `gh api user --jq .login` returns an account (the login is printed, never the token) — **fails if no `GH_TOKEN` is configured**, since the point is to prove which identity the agent has;
 - `env -u GH_TOKEN gh auth status` fails: no `gh` login is stored behind `GH_TOKEN`.
