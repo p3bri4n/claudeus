@@ -64,7 +64,9 @@ Then open the project in VS Code → "Reopen in Container". Once inside, open a 
 
 ## GitHub access (scoped token, no SSH key)
 
-The idea: a revocable, narrowly-scoped token, never your SSH keys, inside the container. Which kind of token depends on who owns the repository the agent works on:
+The idea: a revocable, narrowly-scoped token, never your SSH keys, inside the container.
+
+1. **Create the token.** Which kind depends on who owns the repository the agent works on:
 
 | Case | Token type | Why |
 |---|---|---|
@@ -82,7 +84,7 @@ The idea: a revocable, narrowly-scoped token, never your SSH keys, inside the co
 
 > **Warning — a classic `repo` token is a ceiling, not a filter.** It grants access to **every** repository the account can reach (all its own repos, and every repo where it is a collaborator or org member), not just the one you have in mind. Only use it with an account that has access to nothing else — a dedicated account with a single collaboration is the intended setup. If the account can see other private repos, use another approach.
 
-**Store it on the host** (outside any repo):
+2. **Store it on the host** (outside any repo):
 
    ```bash
    mkdir -p ~/.config/claudeus
@@ -94,7 +96,7 @@ The idea: a revocable, narrowly-scoped token, never your SSH keys, inside the co
    chmod 600 ~/.config/claudeus/env
    ```
 
-**That's it.** `claudeus` sources this file automatically, passes the token into the container, and wires git to it via `gh auth setup-git`. Inside the container, `git clone/push`, `gh pr create`, etc. work out of the box — use **HTTPS** URLs (not `git@github.com:`).
+3. **That's it.** `claudeus` sources this file automatically, passes the token into the container, and wires git to it via `gh auth setup-git`. Inside the container, `git clone/push`, `gh pr create`, etc. work out of the box — use **HTTPS** URLs (not `git@github.com:`).
 
 For the VS Code devcontainer: export `GH_TOKEN` in your shell before launching VS Code (`devcontainer.json` picks it up via `${localEnv:GH_TOKEN}`).
 
