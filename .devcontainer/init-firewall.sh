@@ -5,6 +5,24 @@
 set -euo pipefail
 IFS=$'\n\t'
 
+# Deux modes :
+#  - premier démarrage : politique DROP + règles + ipset (tout ci-dessous) ;
+#  - relance en session (règles déjà en place) : on ne touche NI aux règles NI à
+#    celles de dockerd ; on reconstruit seulement l'ipset dans un ensemble neuf
+#    puis on l'échange atomiquement. Pas de fenêtre ouverte, pas de blocage : le
+#    flush complet coupait l'accès à api.github.com avant de le relire, et
+#    supprimait les chaînes de dockerd.
+SET=allowed-domains
+REFRESH=0
+if ipset list allowed-domains >/dev/null 2>&1 && iptables -S OUTPUT 2>/dev/null | grep -q -- '--match-set allowed-domains'; then
+    REFRESH=1
+    SET=allowed-domains-new
+    ipset destroy "$SET" 2>/dev/null || true
+    trap 'ipset destroy allowed-domains-new 2>/dev/null || true' EXIT
+    echo "Règles déjà en place : rafraîchissement de l'ipset uniquement"
+fi
+
+if [ "$REFRESH" = 0 ]; then
 # 1. Sauvegarder les règles DNS internes de Docker AVANT le flush
 DOCKER_DNS_RULES=$(iptables-save -t nat | grep "127\.0\.0\.11" || true)
 
@@ -37,12 +55,14 @@ iptables -A INPUT -p tcp --sport 22 -m state --state ESTABLISHED -j ACCEPT
 iptables -A INPUT -i lo -j ACCEPT
 iptables -A OUTPUT -o lo -j ACCEPT
 
+fi  # fin du bloc premier démarrage
+
 # ipset avec support CIDR
-ipset create allowed-domains hash:net
+ipset create "$SET" hash:net
 
 # Plages IP GitHub (web + api + git)
 echo "Récupération des plages IP GitHub..."
-gh_ranges=$(curl -s https://api.github.com/meta)
+gh_ranges=$(curl -s --connect-timeout 10 --max-time 30 https://api.github.com/meta || true)
 if [ -z "$gh_ranges" ]; then
     echo "ERREUR : impossible de récupérer les plages IP GitHub"
     exit 1
@@ -59,7 +79,7 @@ while read -r cidr; do
         echo "ERREUR : CIDR invalide depuis GitHub meta : $cidr"
         exit 1
     fi
-    ipset add allowed-domains "$cidr"
+    ipset add "$SET" "$cidr"
 done < <(echo "$gh_ranges" | jq -r '(.web + .api + .git)[]' | aggregate -q)
 
 # Domaines autorisés — lus depuis URL_whitelist.yml (édition à chaud, pas de
@@ -104,10 +124,16 @@ for entry in "${required_domains[@]}" $(printf '%s:optional\n' "${optional_domai
 
     while read -r ip; do
         echo "Ajout de $ip pour $domain"
-        ipset add allowed-domains "$ip" 2>/dev/null || true
+        ipset add "$SET" "$ip" 2>/dev/null || true
     done < <(echo "$ips")
 done
 
+if [ "$REFRESH" = 1 ]; then
+    ipset swap allowed-domains-new allowed-domains
+    ipset destroy allowed-domains-new
+    trap - EXIT
+    echo "ipset allowed-domains rafraîchi"
+else
 # IP de l'hôte via la route par défaut
 HOST_IP=$(ip route | grep default | cut -d" " -f3)
 if [ -z "$HOST_IP" ]; then
@@ -135,6 +161,8 @@ iptables -A OUTPUT -m set --match-set allowed-domains dst -j ACCEPT
 
 # Tout le reste : REJECT explicite (feedback immédiat plutôt que timeout)
 iptables -A OUTPUT -j REJECT --reject-with icmp-admin-prohibited
+
+fi  # fin du bloc premier démarrage
 
 echo "Configuration firewall terminée"
 echo "Vérification..."
