@@ -192,7 +192,7 @@ Limits you should know about:
 ## Self-test (`claudeus selftest`)
 
 ```bash
-claudeus [--profile <name>] ~/projects/my-project selftest   # exit code 0 = all good, 1 = first failure
+claudeus [--profile <name>] ~/projects/my-project selftest [--require-github]   # exit code 0 = all good, 1 = first failure
 ```
 
 Starts the container exactly like a normal session and checks, stopping at the first failure:
@@ -201,7 +201,7 @@ Starts the container exactly like a normal session and checks, stopping at the f
 - a domain outside the whitelist (`https://example.com`) is unreachable; the mounted whitelist is read-only;
 - re-running `sudo init-firewall.sh` leaves the iptables rules byte-for-byte identical to those of the initial setup, still uses the mounted whitelist file, and `sudo WHITELIST_FILE=… init-firewall.sh` is refused;
 - `.claudeus/` and every `readonly-paths` entry is not writable; every `hidden-paths` entry is empty/unreadable;
-- `gh api user --jq .login` returns an account (the login is printed, never the token) — **fails if no `GH_TOKEN` is configured**, since the point is to prove which identity the agent has;
+- GitHub is **optional**: with a `GH_TOKEN`, `gh api user --jq .login` must return an account (the login is printed, never the token). Without one, these checks are reported `SKIP` and the summary says "GitHub non vérifié". Pass `--require-github` to make a missing token a failure (use it when the point is to prove which identity the agent has);
 - `env -u GH_TOKEN gh auth status` fails: no `gh` login is stored behind `GH_TOKEN`.
 
 The output is one line per check and contains no secret, so it can be pasted into a report. The test script is `.devcontainer/selftest.sh`, mounted read-only from the host (no image rebuild). It cannot prove the *absence* of leaks it does not look for: it is a regression net, not an audit.
