@@ -236,7 +236,7 @@ sysbox's GPU passthrough currently has a documented bug with **multi-GPU hosts**
 
 ## Tools and reproducibility
 
-- **Pinned versions**: the image builds Claude Code `2.1.325` and `mise` `v2026.11.9` (no more `latest`). Change them with build arguments: `docker rmi claudeus; CLAUDE_CODE_VERSION=x.y.z claudeus <project>` or `docker build --build-arg CLAUDE_CODE_VERSION=x.y.z --build-arg MISE_VERSION=vYYYY.M.P -t claudeus .devcontainer`. (`mise` is installed through its official install script, pinned to that version, not checksum-verified here.)
+- **Pinned versions**: the image builds Claude Code `2.1.325` and `mise` `v2026.11.9` (no more `latest`). Change them with build arguments: `docker rmi claudeus; CLAUDE_CODE_VERSION=x.y.z claudeus <project>` or `docker build --build-arg CLAUDE_CODE_VERSION=x.y.z --build-arg MISE_VERSION=vYYYY.M.P -t claudeus .devcontainer`. `mise` is downloaded as a release binary and verified against SHA-256 sums pinned in the Dockerfile (`MISE_SHA256_X64` / `MISE_SHA256_ARM64`, from the release's `SHASUMS256.txt`); when you change `MISE_VERSION`, update both sums or the build fails.
 - **`mise`** is installed as a generic tool; Claudeus ships none of a project's tools. Each project runs its own `mise install` (or `mise use node@22`). Its shims come first in `PATH`, so a mise-managed `node`/`python3` replaces the image's Node 20 / Python 3.11 for that project (tested: `mise use node@22` → `node v22`, and `claude` still runs under it).
 - **mise needs network access that the default whitelist does not give**, by design (only what a project needs). Add them in `<project>/.claudeus/URL_whitelist.yml`:
   - Node: `nodejs.org`.

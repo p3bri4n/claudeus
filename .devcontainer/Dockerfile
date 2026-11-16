@@ -8,6 +8,10 @@ ENV TZ="$TZ"
 # (ou : CLAUDE_CODE_VERSION=x.y.z claudeus <projet>, après `docker rmi claudeus`)
 ARG CLAUDE_CODE_VERSION=2.1.325
 ARG MISE_VERSION=v2026.11.9
+# Sommes SHA-256 du binaire mise pour MISE_VERSION (copiées de SHASUMS256.txt de la release).
+# Si vous changez MISE_VERSION, changez aussi ces deux valeurs : le build échoue sinon.
+ARG MISE_SHA256_X64=f13f3e5ec88807e0161669b3aa07a91d84478cdf1e95b5b92b63f85a25d42395
+ARG MISE_SHA256_ARM64=b8dd05af6447cee933928664982a8cb2fa646e6951cfc8539db23ce2554a7b04
 
 # Outils de base + iptables/ipset pour le firewall + Python
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -89,7 +93,16 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 # outil de projet : chaque projet lance lui-même `mise install`. Les shims passent
 # devant /usr/local/bin dans le PATH, de sorte qu'un node/python installé par mise
 # remplace celui de l'image (node 20, python 3.11) pour ce projet.
-RUN curl -fsSL https://mise.run | MISE_VERSION=${MISE_VERSION} sh
+RUN set -e; \
+  case "$(dpkg --print-architecture)" in \
+    amd64) a=x64;   sum="$MISE_SHA256_X64" ;; \
+    arm64) a=arm64; sum="$MISE_SHA256_ARM64" ;; \
+    *) echo "architecture non supportée pour mise" >&2; exit 1 ;; \
+  esac; \
+  mkdir -p /home/node/.local/bin; \
+  curl -fsSL -o /home/node/.local/bin/mise "https://github.com/jdx/mise/releases/download/${MISE_VERSION}/mise-${MISE_VERSION}-linux-${a}"; \
+  echo "${sum}  /home/node/.local/bin/mise" | sha256sum -c -; \
+  chmod +x /home/node/.local/bin/mise
 ENV PATH=/home/node/.local/share/mise/shims:$PATH
 
 # Claude Code
