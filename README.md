@@ -15,6 +15,7 @@ An isolated Docker environment for running Claude Code with `--dangerously-skip-
 - [GitHub access](#github-access-scoped-token-no-ssh-key)
 - [Identity profiles](#identity-profiles)
 - [Customizing the egress whitelist](#customizing-the-egress-whitelist-url_whitelistyml)
+- [Read-only and hidden paths](#read-only-and-hidden-paths-projectclaudeus)
 - [Docker-in-Docker (sysbox)](#docker-in-docker-sysbox)
 - [Python customization](#python-customization)
 - [Security considerations](#security-considerations)
@@ -155,6 +156,33 @@ Unknown keys and anything that is not a plain host name are refused (exit code 2
 Golden rule: only whitelist what the project actually needs. Every domain added here is a potential exfiltration channel, even under prompt injection.
 
 Note: the firewall resolves domains to IPs at container startup. For CDNs with highly dynamic IPs, you may need to re-run `sudo /usr/local/bin/init-firewall.sh` mid-session.
+
+## Read-only and hidden paths (`<project>/.claudeus/`)
+
+Two optional lists, one relative path per line (`#` comments and blank lines allowed):
+
+```
+# <project>/.claudeus/readonly-paths   — visible, but not writable
+infra
+.claude
+
+# <project>/.claudeus/hidden-paths     — present on disk, unreadable in the container
+.env
+secrets
+```
+
+- `readonly-paths`: mounted `:ro` over `/workspace`.
+- `hidden-paths`: a file is replaced by an empty read-only file (`/dev/null`), a directory by an empty read-only directory. `git status` in the container will show them as changed/deleted; that is expected.
+- **`.claudeus/` itself is always mounted read-only** when it exists; do not list it.
+- Paths that do not exist are skipped with a warning (Claudeus never creates empty folders on your host). Absolute paths, `..`, symbolic links anywhere in the path, and characters outside `A-Za-z0-9._@+/ -` are **refused** (exit code 2): a link created by the agent must not be able to expose a host path.
+- Everything is resolved on the host at launch. If a project has no `.claudeus/` yet, an agent could create one (profile, whitelist, path lists) that would apply to the *next* launch: create the directory yourself (`mkdir .claudeus`) so it gets protected, and review it before launching.
+
+Limits you should know about:
+
+- **A single-file `:ro` mount breaks editors that replace by renaming** (`mv` onto a mounted file fails with "Device or resource busy"). Prefer protecting directories; for hidden files this is harmless.
+- **`.git/config` cannot be read-only** (`git push -u` writes to it), so an agent can change `core.hooksPath` or add hooks in `.git/hooks`. Local git hooks only guard against *mistakes*; the real barrier is server-side (branch rulesets, required CI, token scope).
+- Hiding a file hides it from the container only: if the same secret is elsewhere in a readable path (a copy, shell history, a Terraform state in another folder), it is not protected.
+- Tested with sysbox-runc. Note that with sysbox a `--tmpfs` mount is applied *before* the `/workspace` bind mount and ends up shadowed, which is why directories are masked with an empty host directory (a temporary one, removed at the end of the session).
 
 ## Docker-in-Docker (sysbox)
 

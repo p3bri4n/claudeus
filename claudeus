@@ -105,7 +105,11 @@ BASE_WHITELIST="$SCRIPT_DIR/.devcontainer/URL_whitelist.yml"
 PROJECT_WHITELIST="$PROJECT_DIR/.claudeus/URL_whitelist.yml"
 WHITELIST_MOUNT="$BASE_WHITELIST"
 MERGED_WHITELIST=""
-cleanup() { [ -n "$MERGED_WHITELIST" ] && rm -f "$MERGED_WHITELIST"; return 0; }
+cleanup() {
+    [ -n "$MERGED_WHITELIST" ] && rm -f "$MERGED_WHITELIST"
+    [ -n "${EMPTY_DIR:-}" ] && rmdir "$EMPTY_DIR" 2>/dev/null
+    return 0
+}
 trap cleanup EXIT
 
 # Liste les entrées d'une clé (domains | optional_domains) d'un fichier YAML plat.
@@ -158,6 +162,81 @@ if [ -f "$PROJECT_WHITELIST" ]; then
     echo ">> Whitelist : base + $PROJECT_WHITELIST ($(grep -c '^  - ' "$MERGED_WHITELIST") entrées)"
 fi
 
+# Chemins protégés dans /workspace, déclarés dans <projet>/.claudeus/ :
+#   readonly-paths : montés :ro par-dessus /workspace
+#   hidden-paths   : masqués (fichier -> /dev/null en :ro ; dossier -> dossier vide :ro)
+# .claudeus/ lui-même est toujours monté :ro (s'il existe). Tout est résolu ICI,
+# sur l'hôte. Un chemin doit être relatif, sans « .. », sans lien symbolique dans
+# sa chaîne (un lien créé par l'agent ne doit pas pouvoir exposer un chemin de
+# l'hôte), et sans caractères qui casseraient la syntaxe de -v.
+PROTECT_ARGS=()
+EMPTY_DIR=""
+PROJECT_REAL="$(cd "$PROJECT_DIR" && pwd -P)"
+
+# Affiche, un par ligne, les chemins validés d'un fichier de liste. Refuse (exit 2)
+# les chemins invalides ; avertit et ignore ceux qui n'existent pas.
+PATH_RE='^[A-Za-z0-9._@+/ -]+$'
+validated_paths() {
+    local file="$1" line rel real
+    [ -f "$file" ] || return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%%#*}"
+        line="$(printf '%s' "$line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+        [ -n "$line" ] || continue
+        if [[ "$line" == /* ]]; then
+            echo "ERREUR : chemin absolu refusé dans $file : $line" >&2; exit 2
+        fi
+        if [[ "/$line/" == *"/../"* ]]; then
+            echo "ERREUR : « .. » refusé dans $file : $line" >&2; exit 2
+        fi
+        if ! [[ "$line" =~ $PATH_RE ]]; then
+            echo "ERREUR : caractères non permis dans $file : $line" >&2; exit 2
+        fi
+        rel="$(printf '%s' "$line" | sed -E 's#(^|/)\./#\1#g; s#/+#/#g; s#/$##')"
+        [ -n "$rel" ] && [ "$rel" != "." ] || { echo "ERREUR : chemin vide ou « . » dans $file" >&2; exit 2; }
+        if [ ! -e "$PROJECT_REAL/$rel" ] && [ ! -L "$PROJECT_REAL/$rel" ]; then
+            echo "AVERTISSEMENT : $rel (dans $file) n'existe pas, ignoré" >&2; continue
+        fi
+        real="$(realpath -e -- "$PROJECT_REAL/$rel")"
+        if [ "$real" != "$PROJECT_REAL/$rel" ]; then
+            echo "ERREUR : $rel (dans $file) passe par un lien symbolique ou sort du projet : refusé" >&2; exit 2
+        fi
+        printf '%s\n' "$rel"
+    done < "$file"
+}
+
+if [ -d "$PROJECT_REAL/.claudeus" ] && [ ! -L "$PROJECT_REAL/.claudeus" ]; then
+    PROTECT_ARGS+=(-v "$PROJECT_REAL/.claudeus":/workspace/.claudeus:ro)
+elif [ -L "$PROJECT_REAL/.claudeus" ]; then
+    echo "ERREUR : .claudeus est un lien symbolique : refusé" >&2; exit 2
+fi
+if [ -f "$PROJECT_REAL/.claudeus/readonly-paths" ]; then
+    # Affectation (et non process substitution) : un « exit 2 » de validated_paths
+    # doit arrêter le script, pas seulement un sous-shell.
+    RO_PATHS="$(validated_paths "$PROJECT_REAL/.claudeus/readonly-paths")"
+    while IFS= read -r rel; do
+        [ -n "$rel" ] || continue
+        PROTECT_ARGS+=(-v "$PROJECT_REAL/$rel":"/workspace/$rel":ro)
+    done <<< "$RO_PATHS"
+fi
+if [ -f "$PROJECT_REAL/.claudeus/hidden-paths" ]; then
+    HIDDEN_PATHS="$(validated_paths "$PROJECT_REAL/.claudeus/hidden-paths")"
+    while IFS= read -r rel; do
+        [ -n "$rel" ] || continue
+        if [ -d "$PROJECT_REAL/$rel" ]; then
+            # Pas de --tmpfs : sous sysbox il est monté AVANT le bind de /workspace
+            # et se retrouve masqué (vérifié). Un dossier vide de l'hôte en :ro marche.
+            if [ -z "$EMPTY_DIR" ]; then
+                EMPTY_DIR="$(mktemp -d "${TMPDIR:-/tmp}/claudeus-empty.XXXXXX")"
+                chmod 0555 "$EMPTY_DIR"
+            fi
+            PROTECT_ARGS+=(-v "$EMPTY_DIR":"/workspace/$rel":ro)
+        else
+            PROTECT_ARGS+=(-v /dev/null:"/workspace/$rel":ro)
+        fi
+    done <<< "$HIDDEN_PATHS"
+fi
+
 # Build de l'image si absente
 if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
     echo ">> Build de l'image $IMAGE_NAME..."
@@ -187,6 +266,7 @@ docker run -i "${TTY_ARGS[@]}" --rm \
     --name "claudeus-${PROFILE:+$PROFILE-}${PROJECT_NAME}-$$" \
     --runtime=sysbox-runc \
     -v "$PROJECT_DIR":/workspace \
+    "${PROTECT_ARGS[@]}" \
     -v "$CONFIG_VOLUME":/home/node/.claude \
     -v claudeus-history:/commandhistory \
     -v claudeus-dind:/var/lib/docker \
