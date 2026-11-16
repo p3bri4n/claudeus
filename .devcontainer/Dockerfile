@@ -103,6 +103,9 @@ RUN set -e; \
   curl -fsSL -o /home/node/.local/bin/mise "https://github.com/jdx/mise/releases/download/${MISE_VERSION}/mise-${MISE_VERSION}-linux-${a}"; \
   echo "${sum}  /home/node/.local/bin/mise" | sha256sum -c -; \
   chmod +x /home/node/.local/bin/mise
+# Répertoire des outils installés : créé ici, propriété de node, pour qu'un volume
+# nommé monté dessus (claudeus) en hérite et reste inscriptible par node.
+RUN mkdir -p /home/node/.local/share/mise
 ENV PATH=/home/node/.local/share/mise/shims:$PATH
 
 # Claude Code
