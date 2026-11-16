@@ -2,7 +2,7 @@
 # Lance Claude Code en mode autonome dans un conteneur isolé, sans VS Code.
 #
 # Usage :
-#   claudeus [--profile <nom>] <path> [yolo|claude|shell|<commande>]
+#   claudeus [--profile <nom>] [--fresh-tools] <path> [yolo|claude|shell|<commande>]
 #   claudeus [--profile <nom>] [yolo|claude|shell|<commande>]  # répertoire courant
 #   claudeus [--profile <nom>] <path> selftest [--require-github]   # auto-contrôle de l'isolation (code 1 au premier échec)
 #
@@ -38,11 +38,17 @@ CONFIG_DIR="${CLAUDEUS_CONFIG_DIR:-$HOME/.config/claudeus}"
 
 # Option --profile <nom> (avant le chemin du projet)
 PROFILE=""
-if [ "${1:-}" = "--profile" ]; then
-    [ $# -ge 2 ] || { echo "ERREUR : --profile demande un nom" >&2; exit 2; }
-    PROFILE="$2"
-    shift 2
-fi
+FRESH_TOOLS=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --profile)
+            [ $# -ge 2 ] || { echo "ERREUR : --profile demande un nom" >&2; exit 2; }
+            PROFILE="$2"; shift 2 ;;
+        --fresh-tools)   # outils mise éphémères : pas de volume, tout est réinstallé
+            FRESH_TOOLS=1; shift ;;
+        *) break ;;
+    esac
+done
 
 # Premier argument = chemin du projet si c'est un répertoire existant ;
 # sinon on retombe sur le répertoire courant (rétrocompatible avec
@@ -331,6 +337,17 @@ fi
 TTY_ARGS=()
 [ -t 0 ] && TTY_ARGS=(-t)
 
+# Outils installés par mise : volume nommé PAR PROFIL ET PAR PROJET (hash du chemin
+# réel), pour ne pas réinstaller à chaque session ni mélanger des outils entre
+# projets : un outil compromis dans un projet ne contamine pas les autres.
+# Compromis : un outil empoisonné persiste d'une session à l'autre du même projet.
+# --fresh-tools = pas de volume ; reset : docker volume rm <nom> (voir README).
+MISE_ARGS=()
+if [ "$FRESH_TOOLS" = 0 ]; then
+    MISE_VOLUME="claudeus-mise-${PROFILE:-default}-$(printf '%s' "$PROJECT_REAL" | sha256sum | cut -c1-8)"
+    MISE_ARGS=(-v "$MISE_VOLUME":/home/node/.local/share/mise)
+fi
+
 # --runtime=sysbox-runc : isolation utilisateur complète, permet un dockerd
 # interne (Docker-in-Docker) sans --privileged et sans cap-add (sysbox donne
 # déjà les capacités nécessaires à root dans son user-namespace).
@@ -342,6 +359,7 @@ docker run -i "${TTY_ARGS[@]}" --rm \
     --runtime=sysbox-runc \
     -v "$PROJECT_DIR":/workspace \
     "${PROTECT_ARGS[@]}" \
+    ${MISE_ARGS[@]+"${MISE_ARGS[@]}"} \
     "${SELFTEST_ARGS[@]}" \
     ${GH_META_ARGS[@]+"${GH_META_ARGS[@]}"} \
     -v "$CONFIG_VOLUME":/home/node/.claude \
