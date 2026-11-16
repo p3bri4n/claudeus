@@ -134,6 +134,24 @@ optional_domains:
 
 **No image rebuild needed.** The file is bind-mounted read-only into the container and re-read by `init-firewall.sh` on every startup — edit it, relaunch the sandbox, done. (A copy is also baked into the image as a fallback default, in case you're running the container without the bind-mount.)
 
+### Per-project additions (`<project>/.claudeus/URL_whitelist.yml`)
+
+A project can add domains without touching Claudeus. Same keys (`domains`, `optional_domains`), nothing else:
+
+```yaml
+# <project>/.claudeus/URL_whitelist.yml
+domains:
+  - api.example-registry.io   # needed by this project's build
+optional_domains:
+  - telemetry.example.io
+```
+
+`claudeus` **merges the two files on the host** (de-duplicated; a domain that is required anywhere is not repeated as optional) into a temporary file that is bind-mounted read-only on `/usr/local/etc/url-whitelist.yml`, and deletes it when the session ends. Why on the host: the project file lives in `/workspace`, which the agent can write; if the merge happened in the container, the agent could widen its own egress (the `node` user may re-run `sudo init-firewall.sh` mid-session). With the merged file read-only and outside the workspace, editing the project file during a session has no effect until the next launch.
+
+Unknown keys and anything that is not a plain host name are refused (exit code 2), not silently ignored. Remember that the project file is *your* review point: read it before launching a project you do not fully trust.
+
+`init-firewall.sh` can be re-run mid-session (for rotating CDN IPs): it then only rebuilds the IP set and swaps it in atomically, leaving the rules untouched.
+
 Golden rule: only whitelist what the project actually needs. Every domain added here is a potential exfiltration channel, even under prompt injection.
 
 Note: the firewall resolves domains to IPs at container startup. For CDNs with highly dynamic IPs, you may need to re-run `sudo /usr/local/bin/init-firewall.sh` mid-session.
