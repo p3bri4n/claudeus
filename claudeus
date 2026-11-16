@@ -4,6 +4,7 @@
 # Usage :
 #   claudeus [--profile <nom>] <path> [yolo|claude|shell|<commande>]
 #   claudeus [--profile <nom>] [yolo|claude|shell|<commande>]  # répertoire courant
+#   claudeus [--profile <nom>] <path> selftest [--require-github]   # auto-contrôle de l'isolation (code 1 au premier échec)
 #
 # Profils d'identité : --profile <nom> charge ~/.config/claudeus/<nom>.env
 # (sinon : <projet>/.claudeus/profile, un nom sur une seule ligne ; sinon
@@ -50,15 +51,42 @@ if [ $# -gt 0 ] && [ -d "$1" ]; then
     PROJECT_DIR="$(cd "$1" && pwd)"
     shift
 else
+    # Un premier argument qui ressemble à un chemin (contient « / » ou commence par ~)
+    # mais n'est pas un dossier, et n'est pas un fichier existant (commande), est
+    # presque sûrement une faute de frappe : le prendre pour une commande lancerait
+    # le conteneur sur le répertoire courant, ce qu'on ne veut pas.
+    if [ $# -gt 0 ] && [[ "$1" == */* || "$1" == "~"* ]] && [ ! -e "$1" ]; then
+        echo "ERREUR : dossier de projet introuvable : $1" >&2
+        exit 2
+    fi
     PROJECT_DIR="$(pwd)"
 fi
 PROJECT_NAME="$(basename "$PROJECT_DIR")"
 
 # Profil : --profile > <projet>/.claudeus/profile > aucun (fichier « env »).
-# Le fichier du projet est lisible par l'agent : il ne sert qu'à choisir un nom
-# (validé ci-dessous), jamais un chemin.
+# Le fichier du projet est écrit par le projet (donc potentiellement par l'agent) :
+# il ne peut choisir qu'un profil que L'HÔTE a autorisé pour ce projet, dans
+# <config>/allowed-profiles (une ligne par projet : « <chemin absolu> <profil>[,<profil>...] »).
+# --profile, tapé par l'humain, n'est pas soumis à cette liste.
 if [ -z "$PROFILE" ] && [ -f "$PROJECT_DIR/.claudeus/profile" ]; then
     PROFILE="$(head -n 1 "$PROJECT_DIR/.claudeus/profile" | tr -d '[:space:]')"
+    if [ -n "$PROFILE" ]; then
+        ALLOWED_FILE="$CONFIG_DIR/allowed-profiles"
+        PROJECT_REAL_P="$(cd "$PROJECT_DIR" && pwd -P)"
+        allowed=""
+        if [ -f "$ALLOWED_FILE" ]; then
+            while read -r ap plist; do
+                [[ "$ap" == \#* || -z "$ap" ]] && continue
+                [ "$ap" = "$PROJECT_REAL_P" ] && [[ ",$plist," == *",$PROFILE,"* ]] && allowed=1
+            done < "$ALLOWED_FILE"
+        fi
+        if [ -z "$allowed" ]; then
+            echo "ERREUR : le projet demande le profil « $PROFILE » (.claudeus/profile), mais il n'est pas autorisé pour $PROJECT_REAL_P." >&2
+            echo "  Autorisez-le côté hôte : echo \"$PROJECT_REAL_P $PROFILE\" >> $ALLOWED_FILE" >&2
+            echo "  ou passez --profile $PROFILE explicitement." >&2
+            exit 2
+        fi
+    fi
 fi
 if [ -n "$PROFILE" ] && ! [[ "$PROFILE" =~ ^[A-Za-z0-9_-]+$ ]]; then
     echo "ERREUR : nom de profil invalide (autorisé : lettres, chiffres, _ et -)" >&2
@@ -96,15 +124,203 @@ export GIT_AUTHOR_EMAIL="${GIT_USER_EMAIL:-}"
 export GIT_COMMITTER_NAME="${GIT_USER_NAME:-}"
 export GIT_COMMITTER_EMAIL="${GIT_USER_EMAIL:-}"
 
+# Whitelist réseau : celle de Claudeus, éventuellement fusionnée avec
+# <projet>/.claudeus/URL_whitelist.yml. La fusion se fait ICI, sur l'hôte : le
+# fichier du projet est dans /workspace, modifiable par l'agent. Le résultat est
+# un fichier temporaire monté en lecture seule dans le conteneur, donc
+# impossible à élargir depuis l'intérieur (même en relançant init-firewall.sh).
+BASE_WHITELIST="$SCRIPT_DIR/.devcontainer/URL_whitelist.yml"
+PROJECT_WHITELIST="$PROJECT_DIR/.claudeus/URL_whitelist.yml"
+WHITELIST_MOUNT="$BASE_WHITELIST"
+MERGED_WHITELIST=""
+cleanup() {
+    [ -n "$MERGED_WHITELIST" ] && rm -f "$MERGED_WHITELIST"
+    [ -n "${EMPTY_DIR:-}" ] && rmdir "$EMPTY_DIR" 2>/dev/null
+    return 0
+}
+trap cleanup EXIT
+
+# Liste les entrées d'une clé (domains | optional_domains) d'un fichier YAML plat.
+yaml_list() {
+    awk -v key="$1" '
+        $0 ~ "^"key":" { flag=1; next }
+        /^[^ \t#]/ { flag=0 }
+        flag && /^[ \t]*-/ { print }
+    ' "$2" | sed -E 's/^[[:space:]]*-[[:space:]]*//; s/[[:space:]]*#.*$//; s/^"(.*)"$/\1/' | grep -v '^[[:space:]]*$' || true
+}
+
+if [ -f "$PROJECT_WHITELIST" ]; then
+    # Seules les clés domains / optional_domains sont comprises ; le reste est refusé
+    # plutôt qu'ignoré en silence.
+    if bad=$(grep -E '^[^ \t#-]' "$PROJECT_WHITELIST" | grep -vE '^(domains|optional_domains):[[:space:]]*(#.*)?$'); then
+        echo "ERREUR : clé inconnue dans $PROJECT_WHITELIST (seules domains: et optional_domains: sont permises) :" >&2
+        echo "$bad" >&2
+        exit 2
+    fi
+    MERGED_WHITELIST="$(mktemp "${TMPDIR:-/tmp}/claudeus-whitelist.XXXXXX")"
+    chmod 0644 "$MERGED_WHITELIST"   # lisible par l'utilisateur du conteneur ; monté :ro
+    HOSTNAME_RE='^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$'
+    declare -A SEEN_REQUIRED=()
+    {
+        echo "# Fichier généré par claudeus (fusion de la whitelist de base et de celle du projet)."
+        echo "domains:"
+        for f in "$BASE_WHITELIST" "$PROJECT_WHITELIST"; do
+            while IFS= read -r d; do
+                [[ "$d" =~ $HOSTNAME_RE ]] || { echo "ERREUR : domaine invalide « $d » dans $f" >&2; exit 2; }
+                [ -n "${SEEN_REQUIRED[$d]:-}" ] && continue
+                SEEN_REQUIRED[$d]=1
+                echo "  - $d"
+            done < <(yaml_list domains "$f")
+        done
+        echo
+        echo "optional_domains:"
+        declare -A SEEN_OPTIONAL=()
+        for f in "$BASE_WHITELIST" "$PROJECT_WHITELIST"; do
+            while IFS= read -r d; do
+                [[ "$d" =~ $HOSTNAME_RE ]] || { echo "ERREUR : domaine invalide « $d » dans $f" >&2; exit 2; }
+                # Un domaine requis n'est pas répété comme optionnel (le requis l'emporte)
+                [ -n "${SEEN_REQUIRED[$d]:-}" ] && continue
+                [ -n "${SEEN_OPTIONAL[$d]:-}" ] && continue
+                SEEN_OPTIONAL[$d]=1
+                echo "  - $d"
+            done < <(yaml_list optional_domains "$f")
+        done
+    } > "$MERGED_WHITELIST" || { echo "ERREUR : fusion de la whitelist échouée" >&2; exit 2; }
+    WHITELIST_MOUNT="$MERGED_WHITELIST"
+    echo ">> Whitelist : base + $PROJECT_WHITELIST ($(grep -c '^  - ' "$MERGED_WHITELIST") entrées)"
+fi
+
+# Plages IP GitHub : lues ICI, sur l'hôte, puis montées en lecture seule. Évite que
+# chaque démarrage du conteneur consomme le quota anonyme de api.github.com/meta
+# (60 req/h par IP) : `gh` de l'hôte est authentifié (5000 req/h), et un cache
+# (24 h) évite même l'appel. Si la lecture échoue, un cache périmé est utilisé
+# avec un avertissement ; sans cache, le conteneur retombe sur sa propre lecture.
+META_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/claudeus"
+META_CACHE="$META_CACHE_DIR/github-meta.json"
+GH_META_ARGS=()
+meta_valid() { jq -e '.web and .api and .git' "$1" >/dev/null 2>&1; }
+if ! { [ -s "$META_CACHE" ] && meta_valid "$META_CACHE" && [ -z "$(find "$META_CACHE" -mmin +1440 2>/dev/null)" ]; }; then
+    mkdir -p "$META_CACHE_DIR"
+    META_TMP="$(mktemp "$META_CACHE_DIR/meta.XXXXXX")"
+    # gh (authentifié) si dispo, sinon curl anonyme. Jamais d'affichage du jeton.
+    if { command -v gh >/dev/null 2>&1 && gh api meta > "$META_TMP" 2>/dev/null; } \
+       || curl -fsS --connect-timeout 10 --max-time 30 https://api.github.com/meta > "$META_TMP" 2>/dev/null; then
+        :
+    fi
+    if meta_valid "$META_TMP"; then
+        chmod 0644 "$META_TMP"; mv -f "$META_TMP" "$META_CACHE"
+    else
+        rm -f "$META_TMP"
+        if [ -s "$META_CACHE" ] && meta_valid "$META_CACHE"; then
+            echo "AVERTISSEMENT : lecture des plages GitHub impossible, cache périmé utilisé ($META_CACHE)" >&2
+        fi
+    fi
+fi
+if [ -s "$META_CACHE" ] && meta_valid "$META_CACHE"; then
+    GH_META_ARGS=(-v "$META_CACHE":/usr/local/etc/github-meta.json:ro)
+else
+    echo "AVERTISSEMENT : plages GitHub non lues sur l'hôte ; le conteneur les lira lui-même (quota anonyme)" >&2
+fi
+
+# Chemins protégés dans /workspace, déclarés dans <projet>/.claudeus/ :
+#   readonly-paths : montés :ro par-dessus /workspace
+#   hidden-paths   : masqués (fichier -> /dev/null en :ro ; dossier -> dossier vide :ro)
+# .claudeus/ lui-même est toujours monté :ro (s'il existe). Tout est résolu ICI,
+# sur l'hôte. Un chemin doit être relatif, sans « .. », sans lien symbolique dans
+# sa chaîne (un lien créé par l'agent ne doit pas pouvoir exposer un chemin de
+# l'hôte), et sans caractères qui casseraient la syntaxe de -v.
+PROTECT_ARGS=()
+RO_PATHS=""
+HIDDEN_PATHS=""
+EMPTY_DIR=""
+PROJECT_REAL="$(cd "$PROJECT_DIR" && pwd -P)"
+
+# Affiche, un par ligne, les chemins validés d'un fichier de liste. Refuse (exit 2)
+# les chemins invalides ; avertit et ignore ceux qui n'existent pas.
+PATH_RE='^[A-Za-z0-9._@+/ -]+$'
+validated_paths() {
+    local file="$1" line rel real
+    [ -f "$file" ] || return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%%#*}"
+        line="$(printf '%s' "$line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+        [ -n "$line" ] || continue
+        if [[ "$line" == /* ]]; then
+            echo "ERREUR : chemin absolu refusé dans $file : $line" >&2; exit 2
+        fi
+        if [[ "/$line/" == *"/../"* ]]; then
+            echo "ERREUR : « .. » refusé dans $file : $line" >&2; exit 2
+        fi
+        if ! [[ "$line" =~ $PATH_RE ]]; then
+            echo "ERREUR : caractères non permis dans $file : $line" >&2; exit 2
+        fi
+        rel="$(printf '%s' "$line" | sed -E 's#(^|/)\./#\1#g; s#/+#/#g; s#/$##')"
+        [ -n "$rel" ] && [ "$rel" != "." ] || { echo "ERREUR : chemin vide ou « . » dans $file" >&2; exit 2; }
+        if [ ! -e "$PROJECT_REAL/$rel" ] && [ ! -L "$PROJECT_REAL/$rel" ]; then
+            echo "AVERTISSEMENT : $rel (dans $file) n'existe pas, ignoré" >&2; continue
+        fi
+        real="$(realpath -e -- "$PROJECT_REAL/$rel")"
+        if [ "$real" != "$PROJECT_REAL/$rel" ]; then
+            echo "ERREUR : $rel (dans $file) passe par un lien symbolique ou sort du projet : refusé" >&2; exit 2
+        fi
+        printf '%s\n' "$rel"
+    done < "$file"
+}
+
+if [ -d "$PROJECT_REAL/.claudeus" ] && [ ! -L "$PROJECT_REAL/.claudeus" ]; then
+    PROTECT_ARGS+=(-v "$PROJECT_REAL/.claudeus":/workspace/.claudeus:ro)
+elif [ -L "$PROJECT_REAL/.claudeus" ]; then
+    echo "ERREUR : .claudeus est un lien symbolique : refusé" >&2; exit 2
+fi
+if [ -f "$PROJECT_REAL/.claudeus/readonly-paths" ]; then
+    # Affectation (et non process substitution) : un « exit 2 » de validated_paths
+    # doit arrêter le script, pas seulement un sous-shell.
+    RO_PATHS="$(validated_paths "$PROJECT_REAL/.claudeus/readonly-paths")"
+    while IFS= read -r rel; do
+        [ -n "$rel" ] || continue
+        PROTECT_ARGS+=(-v "$PROJECT_REAL/$rel":"/workspace/$rel":ro)
+    done <<< "$RO_PATHS"
+fi
+if [ -f "$PROJECT_REAL/.claudeus/hidden-paths" ]; then
+    HIDDEN_PATHS="$(validated_paths "$PROJECT_REAL/.claudeus/hidden-paths")"
+    while IFS= read -r rel; do
+        [ -n "$rel" ] || continue
+        if [ -d "$PROJECT_REAL/$rel" ]; then
+            # Pas de --tmpfs : sous sysbox il est monté AVANT le bind de /workspace
+            # et se retrouve masqué (vérifié). Un dossier vide de l'hôte en :ro marche.
+            if [ -z "$EMPTY_DIR" ]; then
+                EMPTY_DIR="$(mktemp -d "${TMPDIR:-/tmp}/claudeus-empty.XXXXXX")"
+                chmod 0555 "$EMPTY_DIR"
+            fi
+            PROTECT_ARGS+=(-v "$EMPTY_DIR":"/workspace/$rel":ro)
+        else
+            PROTECT_ARGS+=(-v /dev/null:"/workspace/$rel":ro)
+        fi
+    done <<< "$HIDDEN_PATHS"
+fi
+
 # Build de l'image si absente
 if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
     echo ">> Build de l'image $IMAGE_NAME..."
-    docker build -t "$IMAGE_NAME" "$SCRIPT_DIR/.devcontainer"
+    BUILD_ARGS=()
+    [ -n "${CLAUDE_CODE_VERSION:-}" ] && BUILD_ARGS+=(--build-arg "CLAUDE_CODE_VERSION=$CLAUDE_CODE_VERSION")
+    [ -n "${MISE_VERSION:-}" ] && BUILD_ARGS+=(--build-arg "MISE_VERSION=$MISE_VERSION")
+    docker build "${BUILD_ARGS[@]}" -t "$IMAGE_NAME" "$SCRIPT_DIR/.devcontainer"
 fi
 
+SELFTEST_ARGS=()
 # Commande à exécuter dans le conteneur — yolo par défaut si rien n'est précisé
 if [ "${1:-}" = "yolo" ] || [ $# -eq 0 ]; then
     CMD=(claude --dangerously-skip-permissions)
+elif [ "${1:-}" = "selftest" ]; then
+    # Le script d'essai est monté en :ro depuis l'hôte (pas de rebuild d'image).
+    shift
+    CMD=(bash /usr/local/bin/claudeus-selftest.sh "$@")   # ex. --require-github
+    SELFTEST_ARGS=(
+        -v "$SCRIPT_DIR/.devcontainer/selftest.sh":/usr/local/bin/claudeus-selftest.sh:ro
+        -e CLAUDEUS_SELFTEST_RO="${RO_PATHS:-}"
+        -e CLAUDEUS_SELFTEST_HIDDEN="${HIDDEN_PATHS:-}"
+    )
 elif [ "${1:-}" = "shell" ]; then
     CMD=(bash)
 else
@@ -125,10 +341,13 @@ docker run -i "${TTY_ARGS[@]}" --rm \
     --name "claudeus-${PROFILE:+$PROFILE-}${PROJECT_NAME}-$$" \
     --runtime=sysbox-runc \
     -v "$PROJECT_DIR":/workspace \
+    "${PROTECT_ARGS[@]}" \
+    "${SELFTEST_ARGS[@]}" \
+    ${GH_META_ARGS[@]+"${GH_META_ARGS[@]}"} \
     -v "$CONFIG_VOLUME":/home/node/.claude \
     -v claudeus-history:/commandhistory \
     -v claudeus-dind:/var/lib/docker \
-    -v "$SCRIPT_DIR/.devcontainer/URL_whitelist.yml":/usr/local/etc/url-whitelist.yml:ro \
+    -v "$WHITELIST_MOUNT":/usr/local/etc/url-whitelist.yml:ro \
     -e CLAUDE_CONFIG_DIR=/home/node/.claude \
     -e GH_TOKEN \
     -e GIT_AUTHOR_NAME \
@@ -138,6 +357,9 @@ docker run -i "${TTY_ARGS[@]}" --rm \
     -w /workspace \
     "$IMAGE_NAME" \
     bash -c '
+        # Fail-closed : si le pare-feu ne se met pas en place, on ne lance RIEN (sans
+        # set -e, la session démarrait quand même, réseau ouvert).
+        set -e
         sudo /usr/local/bin/init-firewall.sh
         sudo dockerd >/tmp/dockerd.log 2>&1 &
         for i in $(seq 1 30); do
@@ -149,6 +371,11 @@ docker run -i "${TTY_ARGS[@]}" --rm \
             exit 1
         fi
         sudo /usr/local/bin/init-firewall-dind.sh
+        # Remotes SSH -> HTTPS, en config GLOBALE du conteneur (~/.gitconfig du
+        # conteneur) : le .git/config du dépôt monté reste intact. Le conteneur
+        # ne contient pas de clé SSH ; seul le jeton (via gh) authentifie.
+        git config --global url."https://github.com/".insteadOf git@github.com:
+        git config --global --add url."https://github.com/".insteadOf ssh://git@github.com/
         { [ -n "${GH_TOKEN:-}" ] && gh auth setup-git 2>/dev/null || true; }
         exec "$@"
     ' -- "${CMD[@]}"

@@ -5,6 +5,24 @@
 set -euo pipefail
 IFS=$'\n\t'
 
+# Deux modes :
+#  - premier démarrage : politique DROP + règles + ipset (tout ci-dessous) ;
+#  - relance en session (règles déjà en place) : on ne touche NI aux règles NI à
+#    celles de dockerd ; on reconstruit seulement l'ipset dans un ensemble neuf
+#    puis on l'échange atomiquement. Pas de fenêtre ouverte, pas de blocage : le
+#    flush complet coupait l'accès à api.github.com avant de le relire, et
+#    supprimait les chaînes de dockerd.
+SET=allowed-domains
+REFRESH=0
+if ipset list allowed-domains >/dev/null 2>&1 && iptables -S OUTPUT 2>/dev/null | grep -q -- '--match-set allowed-domains'; then
+    REFRESH=1
+    SET=allowed-domains-new
+    ipset destroy "$SET" 2>/dev/null || true
+    trap 'ipset destroy allowed-domains-new 2>/dev/null || true' EXIT
+    echo "Règles déjà en place : rafraîchissement de l'ipset uniquement"
+fi
+
+if [ "$REFRESH" = 0 ]; then
 # 1. Sauvegarder les règles DNS internes de Docker AVANT le flush
 DOCKER_DNS_RULES=$(iptables-save -t nat | grep "127\.0\.0\.11" || true)
 
@@ -37,30 +55,51 @@ iptables -A INPUT -p tcp --sport 22 -m state --state ESTABLISHED -j ACCEPT
 iptables -A INPUT -i lo -j ACCEPT
 iptables -A OUTPUT -o lo -j ACCEPT
 
+fi  # fin du bloc premier démarrage
+
 # ipset avec support CIDR
-ipset create allowed-domains hash:net
+ipset create "$SET" hash:net
 
 # Plages IP GitHub (web + api + git)
-echo "Récupération des plages IP GitHub..."
-gh_ranges=$(curl -s https://api.github.com/meta)
-if [ -z "$gh_ranges" ]; then
-    echo "ERREUR : impossible de récupérer les plages IP GitHub"
-    exit 1
+# api.github.com/meta est limité à 60 requêtes/heure par IP sans authentification
+# (le script tourne sous sudo : GH_TOKEN n'y est pas transmis). Quota épuisé =
+# réponse « rate limit » : au premier démarrage on s'arrête avec un message clair ;
+# en relance on garde les plages GitHub de l'ipset actuel plutôt que d'échouer.
+# Source préférée : fichier lu et validé sur l'hôte par claudeus, monté en lecture
+# seule (pas d'appel réseau, pas de quota, non modifiable par l'agent).
+GITHUB_META_FILE=/usr/local/etc/github-meta.json
+if [ -s "$GITHUB_META_FILE" ]; then
+    echo "Plages IP GitHub : lues depuis $GITHUB_META_FILE (fourni par l'hôte)"
+    gh_ranges=$(cat "$GITHUB_META_FILE")
+else
+    echo "Récupération des plages IP GitHub..."
+    gh_ranges=$(curl -s --connect-timeout 10 --max-time 30 https://api.github.com/meta || true)
 fi
 
-if ! echo "$gh_ranges" | jq -e '.web and .api and .git' >/dev/null; then
-    echo "ERREUR : réponse GitHub incomplète"
-    exit 1
-fi
-
-echo "Ajout des plages GitHub..."
-while read -r cidr; do
-    if [[ ! "$cidr" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$ ]]; then
-        echo "ERREUR : CIDR invalide depuis GitHub meta : $cidr"
+if ! echo "$gh_ranges" | jq -e '.web and .api and .git' >/dev/null 2>&1; then
+    gh_msg=$(echo "$gh_ranges" | jq -r '.message // empty' 2>/dev/null | sed -E 's/ for [0-9a-fA-F.:]+//' | cut -c1-60 || true)
+    if [ "$REFRESH" = 1 ]; then
+        echo "AVERTISSEMENT : plages GitHub non rafraîchies (${gh_msg:-réponse vide ou incomplète}) ; plages de l'ipset actuel conservées"
+        while read -r cidr; do
+            ipset add "$SET" "$cidr" 2>/dev/null || true
+        done < <(ipset save allowed-domains | awk '$1=="add" && $3 ~ /\// {print $3}')
+        gh_ranges=""
+    else
+        echo "ERREUR : impossible de lire les plages IP GitHub (${gh_msg:-réponse vide ou incomplète})"
         exit 1
     fi
-    ipset add allowed-domains "$cidr"
-done < <(echo "$gh_ranges" | jq -r '(.web + .api + .git)[]' | aggregate -q)
+fi
+
+if [ -n "$gh_ranges" ]; then
+    echo "Ajout des plages GitHub..."
+    while read -r cidr; do
+        if [[ ! "$cidr" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$ ]]; then
+            echo "ERREUR : CIDR invalide depuis GitHub meta : $cidr"
+            exit 1
+        fi
+        ipset add "$SET" "$cidr"
+    done < <(echo "$gh_ranges" | jq -r '(.web + .api + .git)[]' | aggregate -q)
+fi
 
 # Domaines autorisés — lus depuis URL_whitelist.yml (édition à chaud, pas de
 # rebuild d'image nécessaire : voir ce fichier pour le format).
@@ -104,10 +143,16 @@ for entry in "${required_domains[@]}" $(printf '%s:optional\n' "${optional_domai
 
     while read -r ip; do
         echo "Ajout de $ip pour $domain"
-        ipset add allowed-domains "$ip" 2>/dev/null || true
+        ipset add "$SET" "$ip" 2>/dev/null || true
     done < <(echo "$ips")
 done
 
+if [ "$REFRESH" = 1 ]; then
+    ipset swap allowed-domains-new allowed-domains
+    ipset destroy allowed-domains-new
+    trap - EXIT
+    echo "ipset allowed-domains rafraîchi"
+else
 # IP de l'hôte via la route par défaut
 HOST_IP=$(ip route | grep default | cut -d" " -f3)
 if [ -z "$HOST_IP" ]; then
@@ -135,6 +180,18 @@ iptables -A OUTPUT -m set --match-set allowed-domains dst -j ACCEPT
 
 # Tout le reste : REJECT explicite (feedback immédiat plutôt que timeout)
 iptables -A OUTPUT -j REJECT --reject-with icmp-admin-prohibited
+
+fi  # fin du bloc premier démarrage
+
+# Empreintes lues par « claudeus selftest » (node ne peut pas lire iptables) :
+# - rules : hash de `iptables -S` (règles + politiques, sans compteurs)
+# - whitelist : hash du fichier de whitelist réellement utilisé
+# L'empreinte de référence (état complet après init-firewall-dind.sh) est écrite par
+# ce dernier dans /run, root only en écriture : une relance ne la remplace pas, on
+# peut ainsi prouver qu'elle ne modifie pas les règles.
+RULES_HASH=$(iptables -S | sha256sum | cut -c1-16)
+WL_HASH=$(sha256sum "$WHITELIST_FILE" | cut -c1-16)
+echo "FIREWALL_FINGERPRINT rules=$RULES_HASH whitelist=$WL_HASH"
 
 echo "Configuration firewall terminée"
 echo "Vérification..."

@@ -39,4 +39,11 @@ iptables -A DOCKER-USER -m set --match-set allowed-domains dst -j RETURN
 # (qui ne seront jamais atteintes pour le trafic déjà DROP ici)
 iptables -A DOCKER-USER -j DROP
 
+# Empreinte de référence de l'état complet des règles (lue par « claudeus selftest »).
+# Écrite une seule fois, par root ; une relance de init-firewall.sh ne la touche pas.
+if [ ! -e /run/claudeus-firewall-initial ]; then
+    iptables -S | sha256sum | cut -c1-16 > /run/claudeus-firewall-initial
+    chmod 0644 /run/claudeus-firewall-initial
+fi
+
 echo "Firewall DinD (DOCKER-USER) configuré"

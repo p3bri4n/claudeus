@@ -15,7 +15,11 @@ An isolated Docker environment for running Claude Code with `--dangerously-skip-
 - [GitHub access](#github-access-scoped-token-no-ssh-key)
 - [Identity profiles](#identity-profiles)
 - [Customizing the egress whitelist](#customizing-the-egress-whitelist-url_whitelistyml)
+- [Read-only and hidden paths](#read-only-and-hidden-paths-projectclaudeus)
+- [Self-test](#self-test-claudeus-selftest)
 - [Docker-in-Docker (sysbox)](#docker-in-docker-sysbox)
+- [Tools and reproducibility](#tools-and-reproducibility)
+- [Do `deny` rules and hooks survive yolo mode?](#does---dangerously-skip-permissions-still-honour-a-projects-deny-rules-and-hooks)
 - [Python customization](#python-customization)
 - [Security considerations](#security-considerations)
 
@@ -97,7 +101,7 @@ The idea: a revocable, narrowly-scoped token, never your SSH keys, inside the co
    chmod 600 ~/.config/claudeus/env
    ```
 
-3. **That's it.** `claudeus` sources this file automatically, passes the token into the container, and wires git to it via `gh auth setup-git`. Inside the container, `git clone/push`, `gh pr create`, etc. work out of the box — use **HTTPS** URLs (not `git@github.com:`).
+3. **That's it.** `claudeus` sources this file automatically, passes the token into the container, and wires git to it via `gh auth setup-git`. Inside the container, `git clone/push`, `gh pr create`, etc. work out of the box. A project `remote` in SSH form (`git@github.com:` or `ssh://git@github.com/`) is rewritten to HTTPS by a **global git config inside the container** (`url."https://github.com/".insteadOf`, written at startup); the repository's own `.git/config` on the host is left untouched. The container has no SSH key, so only the token authenticates: pushes are performed as the account that owns `GH_TOKEN` (check with `gh api user --jq .login`).
 
 For the VS Code devcontainer: export `GH_TOKEN` in your shell before launching VS Code (`devcontainer.json` picks it up via `${localEnv:GH_TOKEN}`).
 
@@ -126,7 +130,7 @@ claudeus ~/projects/my-project
 - Each profile gets its **own Claude config volume** (`claudeus-config-<name>`; without profile: `claudeus-config`, as before), so Claude credentials of one identity are never visible from another. History and inner-Docker volumes stay shared.
 - `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN` and `SSH_AUTH_SOCK` are explicitly unset by the script and never passed to the container, even if the shell or the env file defines them.
 - `CLAUDEUS_CONFIG_DIR` overrides `~/.config/claudeus` (used for tests).
-- Security note: `.claudeus/profile` lives in the project, which the agent can write. It is only read at launch, so an agent could pick *another existing profile of yours* for the next session. Until `.claudeus/` is mounted read-only (see later steps) review it, or pass `--profile` explicitly.
+- **Allowed profiles (host side)**: `.claudeus/profile` lives in the project, which the agent can write, so it can only select a profile that *you* authorised for that project in `~/.config/claudeus/allowed-profiles`, one line per project: `<absolute project path> <profile>[,<profile>...]` (`#` comments allowed). Otherwise `claudeus` refuses (exit 2) and prints the line to add. `--profile`, typed by you, is not subject to this list. Paths are compared after resolving symlinks.
 
 ## Customizing the egress whitelist (`URL_whitelist.yml`)
 
@@ -147,9 +151,73 @@ optional_domains:
 
 **No image rebuild needed.** The file is bind-mounted read-only into the container and re-read by `init-firewall.sh` on every startup — edit it, relaunch the sandbox, done. (A copy is also baked into the image as a fallback default, in case you're running the container without the bind-mount.)
 
+### Per-project additions (`<project>/.claudeus/URL_whitelist.yml`)
+
+A project can add domains without touching Claudeus. Same keys (`domains`, `optional_domains`), nothing else:
+
+```yaml
+# <project>/.claudeus/URL_whitelist.yml
+domains:
+  - api.example-registry.io   # needed by this project's build
+optional_domains:
+  - telemetry.example.io
+```
+
+`claudeus` **merges the two files on the host** (de-duplicated; a domain that is required anywhere is not repeated as optional) into a temporary file that is bind-mounted read-only on `/usr/local/etc/url-whitelist.yml`, and deletes it when the session ends. Why on the host: the project file lives in `/workspace`, which the agent can write; if the merge happened in the container, the agent could widen its own egress (the `node` user may re-run `sudo init-firewall.sh` mid-session). With the merged file read-only and outside the workspace, editing the project file during a session has no effect until the next launch.
+
+Unknown keys and anything that is not a plain host name are refused (exit code 2), not silently ignored. Remember that the project file is *your* review point: read it before launching a project you do not fully trust.
+
+`init-firewall.sh` can be re-run mid-session (for rotating CDN IPs): it then only rebuilds the IP set and swaps it in atomically, leaving the rules untouched.
+
+**GitHub IP ranges**: `claudeus` reads `https://api.github.com/meta` **on the host** (with your authenticated `gh` if available, else anonymously), validates it, caches it for 24 h in `~/.cache/claudeus/github-meta.json`, and mounts it read-only in the container (`/usr/local/etc/github-meta.json`), where `init-firewall.sh` uses it instead of calling the API. No per-start API call, no anonymous quota (60 requests/hour per IP) to exhaust, and the file cannot be altered by the agent. If the host cannot fetch it, a stale cache is used with a warning; with no cache at all the container falls back to reading the API itself (anonymous quota applies; a failed start is fail-closed, a failed mid-session re-run keeps the current ranges). The ranges are therefore frozen for the session; delete the cache file to force a refresh. Not available with the VS Code devcontainer, which still reads the API in the container.
+
 Golden rule: only whitelist what the project actually needs. Every domain added here is a potential exfiltration channel, even under prompt injection.
 
 Note: the firewall resolves domains to IPs at container startup. For CDNs with highly dynamic IPs, you may need to re-run `sudo /usr/local/bin/init-firewall.sh` mid-session.
+
+## Read-only and hidden paths (`<project>/.claudeus/`)
+
+Two optional lists, one relative path per line (`#` comments and blank lines allowed):
+
+```
+# <project>/.claudeus/readonly-paths   — visible, but not writable
+infra
+.claude
+
+# <project>/.claudeus/hidden-paths     — present on disk, unreadable in the container
+.env
+secrets
+```
+
+- `readonly-paths`: mounted `:ro` over `/workspace`.
+- `hidden-paths`: a file is replaced by an empty read-only file (`/dev/null`), a directory by an empty read-only directory. `git status` in the container will show them as changed/deleted; that is expected.
+- **`.claudeus/` itself is always mounted read-only** when it exists; do not list it.
+- Paths that do not exist are skipped with a warning (Claudeus never creates empty folders on your host). Absolute paths, `..`, symbolic links anywhere in the path, and characters outside `A-Za-z0-9._@+/ -` are **refused** (exit code 2): a link created by the agent must not be able to expose a host path.
+- Everything is resolved on the host at launch. If a project has no `.claudeus/` yet, an agent could create one (profile, whitelist, path lists) that would apply to the *next* launch: create the directory yourself (`mkdir .claudeus`) so it gets protected, and review it before launching.
+
+Limits you should know about:
+
+- **A single-file `:ro` mount breaks editors that replace by renaming** (`mv` onto a mounted file fails with "Device or resource busy"). Prefer protecting directories; for hidden files this is harmless.
+- **`.git/config` cannot be read-only** (`git push -u` writes to it), so an agent can change `core.hooksPath` or add hooks in `.git/hooks`. Local git hooks only guard against *mistakes*; the real barrier is server-side (branch rulesets, required CI, token scope).
+- Hiding a file hides it from the container only: if the same secret is elsewhere in a readable path (a copy, shell history, a Terraform state in another folder), it is not protected.
+- Tested with sysbox-runc. Note that with sysbox a `--tmpfs` mount is applied *before* the `/workspace` bind mount and ends up shadowed, which is why directories are masked with an empty host directory (a temporary one, removed at the end of the session).
+
+## Self-test (`claudeus selftest`)
+
+```bash
+claudeus [--profile <name>] ~/projects/my-project selftest [--require-github]   # exit code 0 = all good, 1 = first failure
+```
+
+Starts the container exactly like a normal session and checks, stopping at the first failure:
+
+- no `~/.ssh`, no `~/.config/gh`; `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `SSH_AUTH_SOCK` unset;
+- a domain outside the whitelist (`https://example.com`) is unreachable; the mounted whitelist is read-only;
+- re-running `sudo init-firewall.sh` leaves the iptables rules byte-for-byte identical to those of the initial setup, still uses the mounted whitelist file, and `sudo WHITELIST_FILE=… init-firewall.sh` is refused;
+- `.claudeus/` and every `readonly-paths` entry is not writable; every `hidden-paths` entry is empty/unreadable;
+- GitHub is **optional**: with a `GH_TOKEN`, `gh api user --jq .login` must return an account (the login is printed, never the token). Without one, these checks are reported `SKIP` and the summary says "GitHub non vérifié". Pass `--require-github` to make a missing token a failure (use it when the point is to prove which identity the agent has);
+- `env -u GH_TOKEN gh auth status` fails: no `gh` login is stored behind `GH_TOKEN`.
+
+The output is one line per check and contains no secret, so it can be pasted into a report. The test script is `.devcontainer/selftest.sh`, mounted read-only from the host (no image rebuild). It cannot prove the *absence* of leaks it does not look for: it is a regression net, not an audit.
 
 ## Docker-in-Docker (sysbox)
 
@@ -178,6 +246,29 @@ Officially supported: Ubuntu 24.04 (Noble, kernel 6.8+), 22.04, 20.04, 18.04, De
 ### Known limitation: multiple GPUs
 
 sysbox's GPU passthrough currently has a documented bug with **multi-GPU hosts** ([nestybox/sysbox#901](https://github.com/nestybox/sysbox/issues/901)): GPU access works reliably on single-GPU machines but is not reliably supported when the host has more than one GPU. If your workload needs multi-GPU access from inside the sandbox, this is not currently guaranteed to work — test before relying on it, and consider running without sysbox (and without inner DinD) for multi-GPU workloads.
+
+## Tools and reproducibility
+
+- **Pinned versions**: the image builds Claude Code `2.1.325` and `mise` `v2026.11.9` (no more `latest`). Change them with build arguments: `docker rmi claudeus; CLAUDE_CODE_VERSION=x.y.z claudeus <project>` or `docker build --build-arg CLAUDE_CODE_VERSION=x.y.z --build-arg MISE_VERSION=vYYYY.M.P -t claudeus .devcontainer`. `mise` is downloaded as a release binary and verified against SHA-256 sums pinned in the Dockerfile (`MISE_SHA256_X64` / `MISE_SHA256_ARM64`, from the release's `SHASUMS256.txt`); when you change `MISE_VERSION`, update both sums or the build fails.
+- **`mise`** is installed as a generic tool; Claudeus ships none of a project's tools. Each project runs its own `mise install` (or `mise use node@22`). Its shims come first in `PATH`, so a mise-managed `node`/`python3` replaces the image's Node 20 / Python 3.11 for that project (tested: `mise use node@22` → `node v22`, and `claude` still runs under it).
+- **mise needs network access that the default whitelist does not give**, by design (only what a project needs). Add them in `<project>/.claudeus/URL_whitelist.yml`:
+  - Node: `nodejs.org`.
+  - Python: `mise-versions.jdx.dev`, `release-assets.githubusercontent.com`, `objects.githubusercontent.com` (tested with `python@3.12`; without them the install fails with "Network is unreachable").
+  - Other tools: check with `MISE_VERBOSE=1 mise install <tool>` which hosts it contacts. The firewall resolves IPs at startup, so a tool served by a rotating CDN may need `sudo init-firewall.sh` again.
+- **What can get in the way of replacing Node/Python**: (1) Claude Code itself runs on whatever `node` comes first in `PATH`; replacing it with a version Claude Code does not support (it needs a recent Node; 20 and 22 were tested) breaks `claude`. (2) `mise` asks to trust a project's `mise.toml` (`mise trust`), and the file lives in the writable workspace. (3) Base-image tools that call `python3` (none of Claudeus's scripts do) would see the mise one.
+
+## Does `--dangerously-skip-permissions` still honour a project's `deny` rules and hooks?
+
+**Yes, both are honoured (tested 2026-11-16, Claude Code 2.1.325, `claude -p --dangerously-skip-permissions`, model haiku).** A project's `permissions.deny` rule blocked its command, and a `PreToolUse` hook ran for every Bash call and blocked another one (exit code 2). Evidence independent of what the model says: of three commands that each create a file, only the unrestricted one's file exists; the hook's witness file lists all three commands. One run per configuration, one tool (Bash), one Claude Code version: re-run the test after upgrading.
+
+[`tests/skip-permissions.sh`](tests/skip-permissions.sh) generates a throw-away project in a temp directory with a `permissions.deny` rule on one harmless `echo`, a `PreToolUse` hook that writes a witness file and blocks another harmless `echo`, then runs `claude -p --dangerously-skip-permissions` through `claudeus` and prints what ran and what the hook saw:
+
+```bash
+claudeus ~/some/dir claude        # once, if needed: log in again, then exit
+tests/skip-permissions.sh [--profile <name>]
+```
+
+**Still, treat them as a guard against mistakes, not a barrier.** `.claude/settings.json` and the hook scripts live in `/workspace`, which the agent can write: unless they are covered by `readonly-paths` (add `.claude`), an agent can edit its own rules for the next session, and `.git/config` cannot be read-only (see above). The real barriers are the mounts, the firewall and server-side controls.
 
 ## Python customization
 
