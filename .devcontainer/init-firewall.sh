@@ -65,8 +65,16 @@ ipset create "$SET" hash:net
 # (le script tourne sous sudo : GH_TOKEN n'y est pas transmis). Quota épuisé =
 # réponse « rate limit » : au premier démarrage on s'arrête avec un message clair ;
 # en relance on garde les plages GitHub de l'ipset actuel plutôt que d'échouer.
-echo "Récupération des plages IP GitHub..."
-gh_ranges=$(curl -s --connect-timeout 10 --max-time 30 https://api.github.com/meta || true)
+# Source préférée : fichier lu et validé sur l'hôte par claudeus, monté en lecture
+# seule (pas d'appel réseau, pas de quota, non modifiable par l'agent).
+GITHUB_META_FILE=/usr/local/etc/github-meta.json
+if [ -s "$GITHUB_META_FILE" ]; then
+    echo "Plages IP GitHub : lues depuis $GITHUB_META_FILE (fourni par l'hôte)"
+    gh_ranges=$(cat "$GITHUB_META_FILE")
+else
+    echo "Récupération des plages IP GitHub..."
+    gh_ranges=$(curl -s --connect-timeout 10 --max-time 30 https://api.github.com/meta || true)
+fi
 
 if ! echo "$gh_ranges" | jq -e '.web and .api and .git' >/dev/null 2>&1; then
     gh_msg=$(echo "$gh_ranges" | jq -r '.message // empty' 2>/dev/null | sed -E 's/ for [0-9a-fA-F.:]+//' | cut -c1-60 || true)

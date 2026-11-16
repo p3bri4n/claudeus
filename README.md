@@ -156,7 +156,7 @@ Unknown keys and anything that is not a plain host name are refused (exit code 2
 
 `init-firewall.sh` can be re-run mid-session (for rotating CDN IPs): it then only rebuilds the IP set and swaps it in atomically, leaving the rules untouched.
 
-**GitHub API quota**: every container start and every re-run reads `https://api.github.com/meta` *unauthenticated* (60 requests/hour per public IP, shared with everything else on your network). When the quota is exhausted a start fails with `ERREUR : impossible de lire les plages IP GitHub (API rate limit exceeded…)` — wait for the reset — while a mid-session re-run keeps the current GitHub ranges and only warns.
+**GitHub IP ranges**: `claudeus` reads `https://api.github.com/meta` **on the host** (with your authenticated `gh` if available, else anonymously), validates it, caches it for 24 h in `~/.cache/claudeus/github-meta.json`, and mounts it read-only in the container (`/usr/local/etc/github-meta.json`), where `init-firewall.sh` uses it instead of calling the API. No per-start API call, no anonymous quota (60 requests/hour per IP) to exhaust, and the file cannot be altered by the agent. If the host cannot fetch it, a stale cache is used with a warning; with no cache at all the container falls back to reading the API itself (anonymous quota applies; a failed start is fail-closed, a failed mid-session re-run keeps the current ranges). The ranges are therefore frozen for the session; delete the cache file to force a refresh. Not available with the VS Code devcontainer, which still reads the API in the container.
 
 Golden rule: only whitelist what the project actually needs. Every domain added here is a potential exfiltration channel, even under prompt injection.
 
