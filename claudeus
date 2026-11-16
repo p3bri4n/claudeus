@@ -4,6 +4,7 @@
 # Usage :
 #   claudeus [--profile <nom>] <path> [yolo|claude|shell|<commande>]
 #   claudeus [--profile <nom>] [yolo|claude|shell|<commande>]  # répertoire courant
+#   claudeus [--profile <nom>] <path> selftest   # auto-contrôle de l'isolation (code 1 au premier échec)
 #
 # Profils d'identité : --profile <nom> charge ~/.config/claudeus/<nom>.env
 # (sinon : <projet>/.claudeus/profile, un nom sur une seule ligne ; sinon
@@ -170,6 +171,8 @@ fi
 # sa chaîne (un lien créé par l'agent ne doit pas pouvoir exposer un chemin de
 # l'hôte), et sans caractères qui casseraient la syntaxe de -v.
 PROTECT_ARGS=()
+RO_PATHS=""
+HIDDEN_PATHS=""
 EMPTY_DIR=""
 PROJECT_REAL="$(cd "$PROJECT_DIR" && pwd -P)"
 
@@ -243,9 +246,18 @@ if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
     docker build -t "$IMAGE_NAME" "$SCRIPT_DIR/.devcontainer"
 fi
 
+SELFTEST_ARGS=()
 # Commande à exécuter dans le conteneur — yolo par défaut si rien n'est précisé
 if [ "${1:-}" = "yolo" ] || [ $# -eq 0 ]; then
     CMD=(claude --dangerously-skip-permissions)
+elif [ "${1:-}" = "selftest" ]; then
+    # Le script d'essai est monté en :ro depuis l'hôte (pas de rebuild d'image).
+    CMD=(bash /usr/local/bin/claudeus-selftest.sh)
+    SELFTEST_ARGS=(
+        -v "$SCRIPT_DIR/.devcontainer/selftest.sh":/usr/local/bin/claudeus-selftest.sh:ro
+        -e CLAUDEUS_SELFTEST_RO="${RO_PATHS:-}"
+        -e CLAUDEUS_SELFTEST_HIDDEN="${HIDDEN_PATHS:-}"
+    )
 elif [ "${1:-}" = "shell" ]; then
     CMD=(bash)
 else
@@ -267,6 +279,7 @@ docker run -i "${TTY_ARGS[@]}" --rm \
     --runtime=sysbox-runc \
     -v "$PROJECT_DIR":/workspace \
     "${PROTECT_ARGS[@]}" \
+    "${SELFTEST_ARGS[@]}" \
     -v "$CONFIG_VOLUME":/home/node/.claude \
     -v claudeus-history:/commandhistory \
     -v claudeus-dind:/var/lib/docker \

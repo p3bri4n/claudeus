@@ -164,6 +164,16 @@ iptables -A OUTPUT -j REJECT --reject-with icmp-admin-prohibited
 
 fi  # fin du bloc premier démarrage
 
+# Empreintes lues par « claudeus selftest » (node ne peut pas lire iptables) :
+# - rules : hash de `iptables -S` (règles + politiques, sans compteurs)
+# - whitelist : hash du fichier de whitelist réellement utilisé
+# L'empreinte de référence (état complet après init-firewall-dind.sh) est écrite par
+# ce dernier dans /run, root only en écriture : une relance ne la remplace pas, on
+# peut ainsi prouver qu'elle ne modifie pas les règles.
+RULES_HASH=$(iptables -S | sha256sum | cut -c1-16)
+WL_HASH=$(sha256sum "$WHITELIST_FILE" | cut -c1-16)
+echo "FIREWALL_FINGERPRINT rules=$RULES_HASH whitelist=$WL_HASH"
+
 echo "Configuration firewall terminée"
 echo "Vérification..."
 if curl --connect-timeout 5 https://example.com >/dev/null 2>&1; then

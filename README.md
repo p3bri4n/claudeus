@@ -16,6 +16,7 @@ An isolated Docker environment for running Claude Code with `--dangerously-skip-
 - [Identity profiles](#identity-profiles)
 - [Customizing the egress whitelist](#customizing-the-egress-whitelist-url_whitelistyml)
 - [Read-only and hidden paths](#read-only-and-hidden-paths-projectclaudeus)
+- [Self-test](#self-test-claudeus-selftest)
 - [Docker-in-Docker (sysbox)](#docker-in-docker-sysbox)
 - [Python customization](#python-customization)
 - [Security considerations](#security-considerations)
@@ -183,6 +184,23 @@ Limits you should know about:
 - **`.git/config` cannot be read-only** (`git push -u` writes to it), so an agent can change `core.hooksPath` or add hooks in `.git/hooks`. Local git hooks only guard against *mistakes*; the real barrier is server-side (branch rulesets, required CI, token scope).
 - Hiding a file hides it from the container only: if the same secret is elsewhere in a readable path (a copy, shell history, a Terraform state in another folder), it is not protected.
 - Tested with sysbox-runc. Note that with sysbox a `--tmpfs` mount is applied *before* the `/workspace` bind mount and ends up shadowed, which is why directories are masked with an empty host directory (a temporary one, removed at the end of the session).
+
+## Self-test (`claudeus selftest`)
+
+```bash
+claudeus [--profile <name>] ~/projects/my-project selftest   # exit code 0 = all good, 1 = first failure
+```
+
+Starts the container exactly like a normal session and checks, stopping at the first failure:
+
+- no `~/.ssh`, no `~/.config/gh`; `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `SSH_AUTH_SOCK` unset;
+- a domain outside the whitelist (`https://example.com`) is unreachable; the mounted whitelist is read-only;
+- re-running `sudo init-firewall.sh` twice leaves the iptables rules byte-for-byte identical to those of the initial setup, still uses the mounted whitelist file, and `sudo WHITELIST_FILE=… init-firewall.sh` is refused;
+- `.claudeus/` and every `readonly-paths` entry is not writable; every `hidden-paths` entry is empty/unreadable;
+- `gh api user --jq .login` returns an account (the login is printed, never the token) — **fails if no `GH_TOKEN` is configured**, since the point is to prove which identity the agent has;
+- `env -u GH_TOKEN gh auth status` fails: no `gh` login is stored behind `GH_TOKEN`.
+
+The output is one line per check and contains no secret, so it can be pasted into a report. The test script is `.devcontainer/selftest.sh`, mounted read-only from the host (no image rebuild). It cannot prove the *absence* of leaks it does not look for: it is a regression net, not an audit.
 
 ## Docker-in-Docker (sysbox)
 
