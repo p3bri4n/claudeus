@@ -42,7 +42,8 @@ iptables -A DOCKER-USER -j DROP
 # Empreinte de référence de l'état complet des règles (lue par « claudeus selftest »).
 # Écrite une seule fois, par root ; une relance de init-firewall.sh ne la touche pas.
 if [ ! -e /run/claudeus-firewall-initial ]; then
-    iptables -S | sha256sum | cut -c1-16 > /run/claudeus-firewall-initial
+    fp_chain() { iptables -S "$1" 2>/dev/null | sha256sum | cut -c1-8; }
+    echo "out=$(fp_chain OUTPUT),in=$(fp_chain INPUT),du=$(fp_chain DOCKER-USER),fwd=$(iptables -S FORWARD 2>/dev/null | head -1 | sha256sum | cut -c1-8)" > /run/claudeus-firewall-initial
     chmod 0644 /run/claudeus-firewall-initial
 fi
 
