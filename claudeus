@@ -96,6 +96,68 @@ export GIT_AUTHOR_EMAIL="${GIT_USER_EMAIL:-}"
 export GIT_COMMITTER_NAME="${GIT_USER_NAME:-}"
 export GIT_COMMITTER_EMAIL="${GIT_USER_EMAIL:-}"
 
+# Whitelist réseau : celle de Claudeus, éventuellement fusionnée avec
+# <projet>/.claudeus/URL_whitelist.yml. La fusion se fait ICI, sur l'hôte : le
+# fichier du projet est dans /workspace, modifiable par l'agent. Le résultat est
+# un fichier temporaire monté en lecture seule dans le conteneur, donc
+# impossible à élargir depuis l'intérieur (même en relançant init-firewall.sh).
+BASE_WHITELIST="$SCRIPT_DIR/.devcontainer/URL_whitelist.yml"
+PROJECT_WHITELIST="$PROJECT_DIR/.claudeus/URL_whitelist.yml"
+WHITELIST_MOUNT="$BASE_WHITELIST"
+MERGED_WHITELIST=""
+cleanup() { [ -n "$MERGED_WHITELIST" ] && rm -f "$MERGED_WHITELIST"; return 0; }
+trap cleanup EXIT
+
+# Liste les entrées d'une clé (domains | optional_domains) d'un fichier YAML plat.
+yaml_list() {
+    awk -v key="$1" '
+        $0 ~ "^"key":" { flag=1; next }
+        /^[^ \t#]/ { flag=0 }
+        flag && /^[ \t]*-/ { print }
+    ' "$2" | sed -E 's/^[[:space:]]*-[[:space:]]*//; s/[[:space:]]*#.*$//; s/^"(.*)"$/\1/' | grep -v '^[[:space:]]*$' || true
+}
+
+if [ -f "$PROJECT_WHITELIST" ]; then
+    # Seules les clés domains / optional_domains sont comprises ; le reste est refusé
+    # plutôt qu'ignoré en silence.
+    if bad=$(grep -E '^[^ \t#-]' "$PROJECT_WHITELIST" | grep -vE '^(domains|optional_domains):[[:space:]]*(#.*)?$'); then
+        echo "ERREUR : clé inconnue dans $PROJECT_WHITELIST (seules domains: et optional_domains: sont permises) :" >&2
+        echo "$bad" >&2
+        exit 2
+    fi
+    MERGED_WHITELIST="$(mktemp "${TMPDIR:-/tmp}/claudeus-whitelist.XXXXXX")"
+    chmod 0644 "$MERGED_WHITELIST"   # lisible par l'utilisateur du conteneur ; monté :ro
+    HOSTNAME_RE='^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$'
+    declare -A SEEN_REQUIRED=()
+    {
+        echo "# Fichier généré par claudeus (fusion de la whitelist de base et de celle du projet)."
+        echo "domains:"
+        for f in "$BASE_WHITELIST" "$PROJECT_WHITELIST"; do
+            while IFS= read -r d; do
+                [[ "$d" =~ $HOSTNAME_RE ]] || { echo "ERREUR : domaine invalide « $d » dans $f" >&2; exit 2; }
+                [ -n "${SEEN_REQUIRED[$d]:-}" ] && continue
+                SEEN_REQUIRED[$d]=1
+                echo "  - $d"
+            done < <(yaml_list domains "$f")
+        done
+        echo
+        echo "optional_domains:"
+        declare -A SEEN_OPTIONAL=()
+        for f in "$BASE_WHITELIST" "$PROJECT_WHITELIST"; do
+            while IFS= read -r d; do
+                [[ "$d" =~ $HOSTNAME_RE ]] || { echo "ERREUR : domaine invalide « $d » dans $f" >&2; exit 2; }
+                # Un domaine requis n'est pas répété comme optionnel (le requis l'emporte)
+                [ -n "${SEEN_REQUIRED[$d]:-}" ] && continue
+                [ -n "${SEEN_OPTIONAL[$d]:-}" ] && continue
+                SEEN_OPTIONAL[$d]=1
+                echo "  - $d"
+            done < <(yaml_list optional_domains "$f")
+        done
+    } > "$MERGED_WHITELIST" || { echo "ERREUR : fusion de la whitelist échouée" >&2; exit 2; }
+    WHITELIST_MOUNT="$MERGED_WHITELIST"
+    echo ">> Whitelist : base + $PROJECT_WHITELIST ($(grep -c '^  - ' "$MERGED_WHITELIST") entrées)"
+fi
+
 # Build de l'image si absente
 if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
     echo ">> Build de l'image $IMAGE_NAME..."
@@ -128,7 +190,7 @@ docker run -i "${TTY_ARGS[@]}" --rm \
     -v "$CONFIG_VOLUME":/home/node/.claude \
     -v claudeus-history:/commandhistory \
     -v claudeus-dind:/var/lib/docker \
-    -v "$SCRIPT_DIR/.devcontainer/URL_whitelist.yml":/usr/local/etc/url-whitelist.yml:ro \
+    -v "$WHITELIST_MOUNT":/usr/local/etc/url-whitelist.yml:ro \
     -e CLAUDE_CONFIG_DIR=/home/node/.claude \
     -e GH_TOKEN \
     -e GIT_AUTHOR_NAME \
