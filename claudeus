@@ -51,6 +51,14 @@ if [ $# -gt 0 ] && [ -d "$1" ]; then
     PROJECT_DIR="$(cd "$1" && pwd)"
     shift
 else
+    # Un premier argument qui ressemble à un chemin (contient « / » ou commence par ~)
+    # mais n'est pas un dossier, et n'est pas un fichier existant (commande), est
+    # presque sûrement une faute de frappe : le prendre pour une commande lancerait
+    # le conteneur sur le répertoire courant, ce qu'on ne veut pas.
+    if [ $# -gt 0 ] && [[ "$1" == */* || "$1" == "~"* ]] && [ ! -e "$1" ]; then
+        echo "ERREUR : dossier de projet introuvable : $1" >&2
+        exit 2
+    fi
     PROJECT_DIR="$(pwd)"
 fi
 PROJECT_NAME="$(basename "$PROJECT_DIR")"
