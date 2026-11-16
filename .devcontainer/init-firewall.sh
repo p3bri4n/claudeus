@@ -184,12 +184,15 @@ iptables -A OUTPUT -j REJECT --reject-with icmp-admin-prohibited
 fi  # fin du bloc premier démarrage
 
 # Empreintes lues par « claudeus selftest » (node ne peut pas lire iptables) :
-# - rules : hash de `iptables -S` (règles + politiques, sans compteurs)
+# - rules : hashes par chaîne gérée (OUTPUT, INPUT, DOCKER-USER, politique FORWARD)
 # - whitelist : hash du fichier de whitelist réellement utilisé
 # L'empreinte de référence (état complet après init-firewall-dind.sh) est écrite par
 # ce dernier dans /run, root only en écriture : une relance ne la remplace pas, on
 # peut ainsi prouver qu'elle ne modifie pas les règles.
-RULES_HASH=$(iptables -S | sha256sum | cut -c1-16)
+# Seules les chaînes que NOUS gérons sont empreintées : dockerd modifie les siennes
+# (DOCKER, bridge, FORWARD) à son rythme, ce qui rendait la comparaison intermittente.
+fp_chain() { iptables -S "$1" 2>/dev/null | sha256sum | cut -c1-8; }
+RULES_HASH="out=$(fp_chain OUTPUT),in=$(fp_chain INPUT),du=$(fp_chain DOCKER-USER),fwd=$(iptables -S FORWARD 2>/dev/null | head -1 | sha256sum | cut -c1-8)"
 WL_HASH=$(sha256sum "$WHITELIST_FILE" | cut -c1-16)
 echo "FIREWALL_FINGERPRINT rules=$RULES_HASH whitelist=$WL_HASH"
 

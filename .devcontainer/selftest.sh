@@ -50,8 +50,14 @@ want_wl=$(sha256sum /usr/local/etc/url-whitelist.yml | cut -c1-16)
 for i in 1; do   # une seule relance : chaque passage lit api.github.com/meta (60 req/h par IP)
     out=$(timeout 120 sudo /usr/local/bin/init-firewall.sh 2>&1) || fail "relance $i de init-firewall.sh en échec"
     fp=$(printf '%s\n' "$out" | grep '^FIREWALL_FINGERPRINT' | tail -1)
-    [ "$(printf '%s' "$fp" | sed -E 's/.*rules=([0-9a-f]+).*/\1/')" = "$initial" ] \
-        || fail "relance $i : les règles iptables ont changé"
+    now=$(printf '%s' "$fp" | sed -E 's/.*rules=([^ ]+).*/\1/')
+    if [ "$now" != "$initial" ]; then
+        changed=""
+        for k in out in du fwd; do
+            [ "$(printf '%s' "$now" | tr ',' '\n' | grep "^$k=")" = "$(printf '%s' "$initial" | tr ',' '\n' | grep "^$k=")" ] || changed="$changed $k"
+        done
+        fail "relance $i : règles modifiées (chaînes :${changed:- ?}) — out=OUTPUT in=INPUT du=DOCKER-USER fwd=politique FORWARD"
+    fi
     [ "$(printf '%s' "$fp" | sed -E 's/.*whitelist=([0-9a-f]+).*/\1/')" = "$want_wl" ] \
         || fail "relance $i : whitelist utilisée différente du fichier monté"
 done
