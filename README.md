@@ -109,6 +109,8 @@ For the VS Code devcontainer: export `GH_TOKEN` in your shell before launching V
 
 If in doubt, or if the agent behaves suspiciously: revoke the PAT on GitHub, all access is cut instantly.
 
+Expiry reminder: at each start, `claudeus` asks GitHub for the token's expiration date and prints a warning when the token expires within 7 days (or is already rejected/expired). Change the threshold with `CLAUDEUS_TOKEN_WARN_DAYS=14 claudeus ...`. It never blocks the session: without a token, without network, or with a classic token that has no expiration, it stays silent. (Not wired into the VS Code devcontainer.)
+
 ## Identity profiles
 
 Several identities (e.g. your own, and a dedicated "machine" account for an agent) can coexist:

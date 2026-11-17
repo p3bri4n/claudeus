@@ -381,6 +381,7 @@ docker run -i "${TTY_ARGS[@]}" --rm \
     -v "$WHITELIST_MOUNT":/usr/local/etc/url-whitelist.yml:ro \
     -e CLAUDE_CONFIG_DIR=/home/node/.claude \
     -e GH_TOKEN \
+    -e CLAUDEUS_TOKEN_WARN_DAYS \
     -e GIT_AUTHOR_NAME \
     -e GIT_AUTHOR_EMAIL \
     -e GIT_COMMITTER_NAME \
@@ -408,5 +409,7 @@ docker run -i "${TTY_ARGS[@]}" --rm \
         git config --global url."https://github.com/".insteadOf git@github.com:
         git config --global --add url."https://github.com/".insteadOf ssh://git@github.com/
         { [ -n "${GH_TOKEN:-}" ] && gh auth setup-git 2>/dev/null || true; }
+        # Avertit si le jeton GitHub est expiré ou proche de expirer (jamais bloquant).
+        /usr/local/bin/check-token-expiry.sh || true
         exec "$@"
     ' -- "${CMD[@]}"
