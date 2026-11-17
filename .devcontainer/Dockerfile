@@ -82,6 +82,10 @@ USER node
 ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global
 ENV PATH=$PATH:/usr/local/share/npm-global/bin:/home/node/.local/bin
 
+# Locale UTF-8 (C.UTF-8 est intégrée à Debian) : sans elle, git et les outils
+# affichent les accents en <C3><A9>.
+ENV LANG=C.UTF-8
+
 ENV SHELL=/bin/bash
 ENV EDITOR=nano
 ENV VISUAL=nano
