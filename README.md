@@ -57,6 +57,8 @@ cd ~/projects/my-project
 claudeus                                # path omitted → uses the current directory
 ```
 
+The interactive modes (`yolo`, `claude`, `shell`) need a terminal: when stdin is not one (script, CI, pipe), `claudeus` stops right away with an explicit error instead of starting a container that exits obscurely. Explicit commands still work without a terminal (`claudeus ~/projects/my-project claude -p "..."`, `selftest`, any `<command>`).
+
 First run: builds the image (~2-3 min), then `claude` will ask you to authenticate. Auth is kept for subsequent sessions. If you edit the Dockerfile later, remove the stale image (`docker rmi claudeus`) so it gets rebuilt on the next run.
 
 ### Option B — VS Code Devcontainer
