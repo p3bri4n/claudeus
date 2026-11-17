@@ -69,6 +69,19 @@ else
 fi
 PROJECT_NAME="$(basename "$PROJECT_DIR")"
 
+# Les sessions interactives (yolo, claude seul, shell) exigent un terminal : sans lui,
+# claude/bash se terminent aussitôt avec un message obscur. On refuse tôt, clairement.
+# Les commandes explicites (selftest, `claude -p ...`, <commande>) restent permises.
+if [ ! -t 0 ]; then
+    if [ "${1:-}" = "yolo" ] || [ "${1:-}" = "shell" ] || [ $# -eq 0 ] \
+        || { [ $# -eq 1 ] && [ "$1" = "claude" ]; }; then
+        echo "ERREUR : '${1:-yolo}' est une session interactive et stdin n'est pas un terminal." >&2
+        echo "  Lancez claudeus depuis un terminal, ou passez une commande explicite :" >&2
+        echo "  claudeus <projet> claude -p \"...\"   |   claudeus <projet> selftest   |   claudeus <projet> <commande>" >&2
+        exit 1
+    fi
+fi
+
 # Profil : --profile > <projet>/.claudeus/profile > aucun (fichier « env »).
 # Le fichier du projet est écrit par le projet (donc potentiellement par l'agent) :
 # il ne peut choisir qu'un profil que L'HÔTE a autorisé pour ce projet, dans
