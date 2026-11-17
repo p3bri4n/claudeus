@@ -120,10 +120,10 @@ RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 # URL_whitelist.yml est copiée ici comme valeur par défaut : en usage normal
 # elle est écrasée par un bind-mount (host) pointant sur le même chemin, pour
 # permettre l'édition à chaud sans rebuild d'image.
-COPY init-firewall.sh init-firewall-dind.sh /usr/local/bin/
+COPY init-firewall.sh init-firewall-dind.sh check-token-expiry.sh /usr/local/bin/
 COPY URL_whitelist.yml /usr/local/etc/url-whitelist.yml
 USER root
-RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/init-firewall-dind.sh && \
+RUN chmod +x /usr/local/bin/init-firewall.sh /usr/local/bin/init-firewall-dind.sh /usr/local/bin/check-token-expiry.sh && \
   echo 'node ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh "", /usr/local/bin/init-firewall-dind.sh "", /usr/bin/dockerd ""' > /etc/sudoers.d/node-firewall && \
   chmod 0440 /etc/sudoers.d/node-firewall
 USER node
