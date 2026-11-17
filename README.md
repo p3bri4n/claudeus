@@ -29,7 +29,7 @@ An isolated Docker environment for running Claude Code with `--dangerously-skip-
 - **Egress firewall**: default-DROP policy, strict whitelist (Anthropic API, GitHub, npm, PyPI, Hugging Face, plus whatever you add). Even if compromised via a prompt injection, Claude cannot exfiltrate to an arbitrary domain — see [Security considerations](#security-considerations) for the limits of this guarantee.
 - **Non-root user**: required by Claude Code for skip-permissions mode.
 - **Persistent auth**: `~/.claude` lives in a named Docker volume, no re-authentication on every session.
-- **Optional Docker-in-Docker**: with [sysbox](https://github.com/nestybox/sysbox) installed on the host, the sandbox can run its own isolated `dockerd` — Claude can `docker build`/`docker run` from inside the sandbox without `--privileged` or a host socket bind-mount.
+- **Docker-in-Docker (requires sysbox)**: with [sysbox](https://github.com/nestybox/sysbox) installed on the host (`claudeus` refuses to start without it, with an explicit error), the sandbox runs its own isolated `dockerd` — Claude can `docker build`/`docker run` from inside the sandbox without `--privileged` or a host socket bind-mount.
 
 ## Installation
 

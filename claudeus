@@ -82,6 +82,20 @@ if [ ! -t 0 ]; then
     fi
 fi
 
+# sysbox est indispensable : sans lui, `docker run --runtime=sysbox-runc` échoue avec un
+# message générique, et avec le runtime par défaut ni le pare-feu ni le dockerd interne
+# ne peuvent démarrer (pas de NET_ADMIN). On le vérifie tôt, avant le build de l'image.
+if ! RUNTIMES=$(docker info --format '{{range $k, $v := .Runtimes}}{{println $k}}{{end}}' 2>/dev/null); then
+    echo "ERREUR : docker est injoignable (démon arrêté, ou droits insuffisants)." >&2
+    exit 1
+fi
+if ! printf '%s\n' "$RUNTIMES" | grep -qx 'sysbox-runc'; then
+    echo "ERREUR : le runtime Docker « sysbox-runc » n'est pas installé sur cet hôte." >&2
+    echo "  claudeus en a besoin (isolation + Docker-in-Docker sans --privileged)." >&2
+    echo "  Installation : voir la section « Docker-in-Docker (sysbox) » du README." >&2
+    exit 1
+fi
+
 # Profil : --profile > <projet>/.claudeus/profile > aucun (fichier « env »).
 # Le fichier du projet est écrit par le projet (donc potentiellement par l'agent) :
 # il ne peut choisir qu'un profil que L'HÔTE a autorisé pour ce projet, dans
