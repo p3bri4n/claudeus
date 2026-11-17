@@ -111,6 +111,11 @@ RUN set -e; \
 # nommé monté dessus (claudeus) en hérite et reste inscriptible par node.
 RUN mkdir -p /home/node/.local/share/mise
 ENV PATH=/home/node/.local/share/mise/shims:$PATH
+# Pas de vérification des attestations GitHub pour les outils aqua : elle exige
+# tmaproduction.blob.core.windows.net (stockage Azure partagé), que le pare-feu, filtrant
+# par IP, ne peut autoriser sans ouvrir d'autres comptes Azure (canal de sortie possible).
+# Sans ce réglage, `mise install aqua:...` échoue (testé avec aqua:cli/cli@2.60.0).
+ENV MISE_AQUA_GITHUB_ATTESTATIONS=false
 
 # Claude Code
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
